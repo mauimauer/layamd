@@ -194,7 +194,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid var(--rule);
 <section id="speed">
   <span class="eyebrow">Speed</span>
   <h2>Latency and throughput over HTTP</h2>
-  <p class="lede">Measured from a client on the same host over keep-alive connections, which is how real HTTP clients behave. The fixed server adds one line, <code>disable_nagle_algorithm = True</code>; the shipped server stalls each keep-alive response by about 40 ms.</p>
+  <p class="lede">Measured from a client on the same host over keep-alive connections, which is how real HTTP clients behave. The original server sent headers and body as two writes with Nagle's algorithm on, which stalled every keep-alive response by about 40 ms. The current server writes once with <code>TCP_NODELAY</code>; the "before" numbers are kept for comparison.</p>
   <div class="panel">
     <div class="panel-head"><h3>Latency per request by number of questions</h3><p>p50 of 50 sequential requests, upstream's latency protocol.</p></div>
     <div class="legend" id="qpr-legend"></div>
@@ -202,7 +202,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid var(--rule);
   </div>
   <div class="grid2">
     <div class="panel"><div class="panel-head"><h3>Latency by input length</h3><p>One 4-way choice, p50.</p></div><div class="chart" id="len-chart"></div></div>
-    <div class="panel"><div class="panel-head"><h3>Shipped vs fixed server</h3><p>Single-question requests, p50.</p></div><div class="chart" id="nagle-chart"></div></div>
+    <div class="panel"><div class="panel-head"><h3>Before and after the server fix</h3><p>Single-question requests, p50.</p></div><div class="chart" id="nagle-chart"></div></div>
   </div>
   <div class="panel">
     <div class="controls"><div class="seg" id="srv-seg" role="group" aria-label="Server build"></div></div>
@@ -388,10 +388,10 @@ const xnliOther = v => { const a = SUITES.filter(s => s.startsWith("xnli.") && s
 const F = [
   ["good", "Correct", "The engine reproduces upstream's decisions",
     `Across ${allPar.length} suite runs and ${totalQ.toLocaleString()} questions, accuracy matches the PyTorch T4 run to within one answer in ${within1} of ${allPar.length} suites. The remaining differences come from near-tie probabilities, not a systematic shift.`],
-  ["crit", "Speed bug", "Shipped server adds ~40 ms to every keep-alive request",
-    `The HTTP handler writes headers and body separately with Nagle's algorithm on, so a pooled client waits for a delayed ACK. One decision takes ${fmt(shipped1, 1)} ms shipped and ${fmt(q1("laya-en"), 1)} ms with <code>disable_nagle_algorithm = True</code> in <code>server/app.py</code>. Peak throughput is unchanged; single-client throughput rises about 6×.`],
-  ["warn", "Gap", "Questions with more than 64 options are rejected",
-    `The engine gathers at most 64 option markers (<code>Engine::KP</code>), so the Banking77 suite (77 labels in one question) returns HTTP 400 on every checkpoint. Upstream PyTorch accepts it and scores 0.425. Callers must shortlist or use a tournament over the labels.`],
+  ["good", "Fixed", "Keep-alive requests no longer wait ~40 ms",
+    `The HTTP handler wrote headers and body separately with Nagle's algorithm on, so a pooled client waited for a delayed ACK on every request. One decision took ${fmt(shipped1, 1)} ms; the server now writes once with <code>TCP_NODELAY</code> and takes ${fmt(q1("laya-en"), 1)} ms. Peak throughput is unchanged; single-client throughput is about 6× higher.`],
+  ["good", "Fixed", "Questions can have up to 255 options",
+    `The engine reserved 64 option slots per question and rejected anything larger, so Banking77 (77 labels) failed on every checkpoint. Options are now packed per pass, which also removed the padding work (batched throughput +1–4%). Banking77 scores ${fmt(S("laya-en", "en.banking77_full").accuracy, 3)} (English) on the first 500 test rows, and 77- and 120-option answers match PyTorch fp32 within 0.003. Labels squeezed to ~4 tokens stay a weak spot; shortlisting or a tournament over the labels does better.`],
   ["info", "Model", "Laya is strong at classic NLU and weak at business decisions out of the box",
     `English: XNLI ${fmt(S("laya-en", "xnli.en").accuracy, 2)}, AG News ${fmt(S("laya-en", "en.ag_news").accuracy, 2)}, but typed-decisions only ${fmt(tdEn?.accuracy, 3)} zero-shot (majority class 0.461). The fine-tuned checkpoint reaches ${fmt(tdTyped?.accuracy, 3)}. Held-out English tasks (SST-5, emotion, prompt injection): ${englishHeld("laya-en").map(x => fmt(x, 2)).join(" / ")}.`],
   ["info", "Routing", "Use the multilingual checkpoint for anything not in English",
@@ -551,8 +551,8 @@ function drawSpeed() {
   lineChart($("len-chart"), V.map(v => ({ name: NAME[v], color: COL[v], pts: spd(v).input_length.map(r => [r.tokens, r.p50_ms]) })),
     { x0: 0, xlabel: "input tokens", yfmt: t => t + " ms", tip: p => `${p[0]} tokens: <b>${fmt(p[1], 1)} ms</b>` });
   const groups = V.map(v => ({ label: NAME[v], vals: [
-    { key: "shipped server", color: "var(--ref)", v: spdShip(v).questions_per_request?.["1"]?.p50_ms || 0, fmt: x => fmt(x, 1) + " ms" },
-    { key: "with TCP_NODELAY", color: COL[v], v: spd(v).questions_per_request["1"].p50_ms, fmt: x => fmt(x, 1) + " ms" }] }));
+    { key: "before fix", color: "var(--ref)", v: spdShip(v).questions_per_request?.["1"]?.p50_ms || 0, fmt: x => fmt(x, 1) + " ms" },
+    { key: "current server", color: COL[v], v: spd(v).questions_per_request["1"].p50_ms, fmt: x => fmt(x, 1) + " ms" }] }));
   groupedBars($("nagle-chart"), groups, { xmax: 60, xfmt: t => t + " ms" });
   drawConc();
 }
@@ -574,25 +574,25 @@ $("method-body").innerHTML = `
 <li><b>typed-decisions</b> (LocalLLaMA): 400 cases, 2,000 mixed questions, soft teacher labels. Held out for the base checkpoints.</li>
 <li><b>MASSIVE</b> intent and scenario, 14 languages × 300, as 20-option choices (gold + 19 sampled labels).</li>
 <li><b>XNLI</b>, 15 languages × 300, 3-way.</li>
-<li><b>English</b>: SST-5 (5-level score), DAIR Emotion, deepset prompt-injections (116), Banking77 (77 options), AG News and BoolQ (both in Laya's training mix, so they test retention).</li></ul></div>
+<li><b>English</b>: SST-5 (5-level score), DAIR Emotion, deepset prompt-injections (116), Banking77 (first 500 test rows, 77 options in one question; no T4 result to compare), AG News and BoolQ (both in Laya's training mix, so they test retention).</li></ul></div>
 <div><h3>Protocol</h3><ul>
 <li>Ported from upstream <code>research/scripts/laya_benchmark_colab.ipynb</code>: same rows, prompts, seed 13 and metric code (15-bin ECE). Our results are compared with <code>t4_colab_benchmark.json</code> (${esc(up.meta.timestamp)}).</li>
 <li>Every case is one <code>POST /v1/decide</code> with all its questions. Probabilities are the served, temperature-scaled ones, which correspond to upstream's "calibrated" column.</li>
 <li>NLL floors probabilities at 5e-5 because the API rounds to 4 decimals. Accuracy, ECE and Brier are unaffected.</li></ul></div>
 <div><h3>Speed setup</h3><ul>
 <li>Server in the stock <code>laya:gfx1151</code> container; client on the same host over keep-alive HTTP/1.1, so numbers include JSON and tokenization.</li>
-<li>"Fixed" runs mount <code>bench/eval/patched/app.py</code> (one added line). Quality numbers come from the fixed server; the fix does not touch inference.</li>
+<li>"Before server fix" is the original server measured with the same client; the fix changes only how responses are written.</li>
 <li>T4 latencies are upstream's in-process <code>system_one</code> calls with no HTTP, which favours the T4 side.</li></ul></div>
 <div><h3>Reproduce</h3><ul>
 <li><code>bench/eval/.venv/bin/python bench/eval/build_suites.py</code></li>
-<li><code>bench/eval/run_all.sh</code> (all three checkpoints, ~15 min)</li>
+<li><code>docker compose build && bench/eval/run_all.sh</code> (all three checkpoints, ~10 min)</li>
 <li><code>bench/eval/.venv/bin/python bench/eval/metrics.py && bench/eval/.venv/bin/python bench/eval/build_report.py</code></li></ul></div>`;
 $("foot").textContent = `layamd · ${V.map(v => NAME[v] + " " + D.variants[v].timestamp).join(" · ")}`;
 
 /* ---------- boot ---------- */
 seg("fam-seg", FAMS, qFam, k => { qFam = k; try { localStorage.setItem("laya.fam", k) } catch (e) {} drawDots() });
 seg("metric-seg", METRICS.map(m => [m[0], m[1]]), qMetric, k => { qMetric = k; try { localStorage.setItem("laya.metric", k) } catch (e) {} drawDots() });
-seg("srv-seg", [["speed", "Fixed server (TCP_NODELAY)"], ["speed_shipped", "Shipped server"]], srv, k => { srv = k; drawConc() });
+seg("srv-seg", [["speed", "Current server"], ["speed_shipped", "Before server fix"]], srv, k => { srv = k; drawConc() });
 legend("q-legend", V.map(v => [NAME[v], COL[v]]).concat([["chance", "var(--ref)", "tick"]]));
 function drawAll() { drawParity(); drawDots(); drawFamilies(); drawTyped(); drawCal(); drawRobust(); drawSpeed() }
 drawAll();
