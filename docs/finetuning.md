@@ -1,9 +1,10 @@
 # Fine-tuning
 
 Base Laya scores near chance on business decisions (0.36 on typed-decisions, where always
-picking the most common answer scores 0.46). Fine-tuned on in-domain decisions, it reaches
-0.77. If you have a few thousand labelled decisions from your own workload, fine-tuning is the
-biggest improvement available, and on Strix Halo it runs on the same machine that serves.
+picking the most common answer scores 0.46). Fine-tuned on in-domain decisions, it reaches 0.75
+(this recipe) to 0.77 (the published checkpoint). If you have a few thousand labelled decisions
+from your own workload, fine-tuning is the biggest improvement available, and on Strix Halo it
+runs on the same machine that serves.
 
 The recipe uses **upstream's trainer**: `laya-train` from the `laya` package (Apache-2.0),
 pinned to 0.4.8. It trains with RLCD, a reinforcement-learning objective built on proper
@@ -114,7 +115,18 @@ LAYA_VARIANT=my-ft docker compose up -d
 
 typed-decisions, laya-en base, 4 epochs, 1024/256 budgets, seed 42:
 
-RESULTS_PLACEHOLDER
+| Served by layamd, 2,000 held-out questions | Accuracy | Choice | Score | Yes/no | ECE | Acc. on confident half |
+|---|---:|---:|---:|---:|---:|---:|
+| `laya-en` (base) | 0.362 | 0.290 | 0.323 | 0.487 | 0.174 | 0.427 |
+| This recipe's fine-tune | **0.752** | 0.732 | 0.714 | 0.825 | **0.135** | 0.907 |
+| Published `laya-typed` | 0.766 | 0.733 | 0.724 | 0.857 | 0.214 | 0.903 |
+
+- 5,600 training questions (400 more held back for calibration), 352 optimizer updates. About
+  75 minutes wall clock on an otherwise idle Radeon 8060S, including the trainer's evaluation.
+- The trainer's own table reported 0.749. The server measured 0.752 on the exported fp16 weights.
+- Parity on the fine-tune: 18/18 rows pass, worst probability delta 0.001681.
+- One run, one seed. The recipe lands within 1.4 points of the published checkpoint and is
+  better calibrated on this split.
 
 ## Notes
 
@@ -124,3 +136,10 @@ RESULTS_PLACEHOLDER
   log if you need to reproduce a run.
 - The base checkpoint's tokenizer and encoder config are copied verbatim, so a fine-tune of
   `laya-multi` stays multilingual.
+- PyTorch on gfx1151 uses the plain (math) attention path by default.
+  `TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1 finetune/train.sh ...` switches to AMD's
+  AOTriton kernels: attention forward plus backward was 3.2× faster at 8×1024 tokens with the
+  same error, but a whole 1-epoch run was only about 15% faster. AMD labels these kernels
+  experimental, so the recipe leaves them off.
+- Keep the GPU free while training. In our runs, serving or benchmarking on the same chip at
+  the same time slowed training several-fold.

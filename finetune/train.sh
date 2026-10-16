@@ -22,6 +22,7 @@ EVAL_ARG=; [[ -n $EVAL ]] && EVAL_ARG="--eval /work/$EVAL"
 docker run --rm --device=/dev/kfd --device=/dev/dri \
   --group-add "$(getent group video | cut -d: -f3)" --group-add "$(getent group render | cut -d: -f3)" \
   --security-opt seccomp=unconfined --user "$(id -u):$(id -g)" -e HOME=/tmp -e HF_HOME=/tmp/hf \
+  -e TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL="${TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL:-0}" \
   -v "$ROOT:/work" -v "$ROOT/weights/$BASE:/base:ro" -v "$ROOT/weights/$NAME:/out" \
   laya-train:gfx1151 bash -c '
     set -e
