@@ -1,0 +1,21 @@
+# GitHub's hosted runners have no gfx1151 GPU, so CI only checks what can be checked without one.
+# Engine correctness is checked locally with scripts/parity.sh (see docs/correctness.md).
+name: lint
+on: [push, pull_request]
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Python compiles
+        run: python -m compileall -q server ref bench finetune
+      - name: Shell scripts parse
+        run: for f in scripts/*.sh finetune/*.sh bench/eval/*.sh; do bash -n "$f"; done
+      - name: JSON files parse
+        run: for f in $(git ls-files '*.json'); do python -m json.tool "$f" > /dev/null; done
+      - name: Report script parses
+        run: |
+          sed -n '/<script>/,/<\/script>/p' bench/eval/report_template.html | sed '1d;$d' > /tmp/report.js
+          node --check /tmp/report.js

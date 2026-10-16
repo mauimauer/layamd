@@ -13,3 +13,5 @@ bench/eval/.venv/
 bench/eval/data/
 bench/eval/suites/
 bench/eval/results/
+finetune/data/
+.env

@@ -22,8 +22,8 @@ Laya (https://github.com/NandhaKishorM/laya, https://huggingface.co/convaiinnova
     (research/results/, commit 4ac226d5ee88ed6df8db288a05c766d7a34ee682), used for comparison.
   - bench/eval/build_suites.py and metrics.py reproduce the protocol and metric
     definitions of upstream's research/scripts/laya_benchmark_colab.ipynb.
-  - finetune/: the training script is downloaded from upstream at a pinned commit and is
-    not redistributed here.
+  - finetune/: the trainer is upstream's `laya` package (laya==0.4.8, Apache-2.0),
+    installed from PyPI into the training image; it is not redistributed here.
 
 JSON for Modern C++ (https://github.com/nlohmann/json)
   Copyright 2013-2023 Niels Lohmann. MIT License.
