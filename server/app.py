@@ -25,6 +25,10 @@ STATS_LOCK = threading.Lock()
 
 class H(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
+    # A response sent as headers-write + body-write on a keep-alive connection waits ~40 ms
+    # (Nagle holds the 2nd write until the client's delayed ACK). _send writes once; NODELAY
+    # covers any other path.
+    disable_nagle_algorithm = True
     def log_message(self, *a): pass
 
     def _send(self, code, obj):
@@ -32,8 +36,8 @@ class H(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        self._headers_buffer.append(b"\r\n" + body)   # end_headers() + body in one write
+        self.flush_headers()
 
     def do_GET(self):
         if self.path == "/health":
