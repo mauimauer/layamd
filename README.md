@@ -44,7 +44,7 @@ Engine, single question:
 Engine, batched (256 tokens each): en/typed ~155 questions/s (6.4 ms/question), multilingual
 ~380 questions/s (2.6 ms/question), flat from 2 to 32 questions per call.
 
-HTTP under concurrent load (`bench/load.py`, single-question requests; `--mixed` = states of
+HTTP under concurrent load (`bench/load.py`, a new connection per request; `--mixed` = states of
 ~60-512 tokens):
 
 | | 1 client | 16-32 clients |
@@ -85,7 +85,10 @@ of 0.10 amplifies any numeric noise ~10x; that is the model's calibration, not t
   registers, Q/K/V read straight from the fused qkv buffer. No S x S matrix in memory; sliding-window
   layers only visit key blocks in their band. vs. GEMM-based attention: 1024 tokens 44 -> 29 ms.
 - **Decision head pruning**: after the last head layer's attention, only option-marker and CLS rows
-  are read, so its out-projection and FFN run on those rows only (gathered, B x 65 rows).
+  are read, so its out-projection and FFN run on those rows only: every question's markers packed
+  back to back (padded to 64 per pass) plus one CLS row per question. A question takes up to 255
+  options (whatever fits `max_len`; upstream's act head encodes the count as k/255).
+  `bench/eval/check_many_options.py` checks 77- and 120-option questions against PyTorch.
 - **Fused residual + LayerNorm**: each residual update (x += GEMM output + bias, fp32) and the
   LayerNorm that follows it are one row-wise kernel (~2%).
 - **GEMM autotuning**: every candidate (hipBLAS with split-K 1/2/4/8 using fp16 partials, and the

@@ -12,7 +12,7 @@ void launch_bias_act(__half* x,const __half* b,int rows,int N,int act,hipStream_
 void launch_gather(const float* h,const int* rows,float* m,int K,int D,hipStream_t st);
 void launch_gather(const __half* h,const int* rows,__half* m,int K,int D,hipStream_t st);
 void launch_bias_to_float(const __half* x,const __half* b,float* y,int n,hipStream_t st);
-void launch_act_head(const float* cls,int D,const float* logits,int KP,const int* nmark,
+void launch_act_head(const float* cls,int D,const float* logits,const int* moff,const int* nmark,
                      const __half* W0,const __half* B0,const __half* W2,const __half* B2,int n_act,float* out,int B,hipStream_t st);
 void launch_transpose(const __half* s,__half* d,int R,int C,hipStream_t st);
 void launch_splitk_reduce(__half* dst,const __half* part,int splits,size_t n,int N,const __half* bias,int accumulate,hipStream_t st);

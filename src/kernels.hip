@@ -264,7 +264,7 @@ __global__ void k_bias_to_float(const __half* __restrict__ x, const __half* __re
 // feats = [top1, top1-top2, normalized entropy, k/255] from softmax over the sequence's valid
 // markers; hidden = GELU(W0 [pooled(CLS), feats] + b0); out = W2 hidden + b2.
 __global__ __launch_bounds__(256) void k_act_head(const float* __restrict__ cls, int D,
-    const float* __restrict__ logits, int KP, const int* __restrict__ nmark,
+    const float* __restrict__ logits, const int* __restrict__ moff, const int* __restrict__ nmark,
     const __half* __restrict__ W0, const __half* __restrict__ B0,
     const __half* __restrict__ W2, const __half* __restrict__ B2, int n_act, float* __restrict__ out){
   extern __shared__ float sm[];
@@ -273,7 +273,7 @@ __global__ __launch_bounds__(256) void k_act_head(const float* __restrict__ cls,
   const int b=blockIdx.x, t=threadIdx.x;
   for(int d=t;d<D;d+=256) in[d]=cls[(size_t)b*D+d];
   if(t==0){
-    const float* z=logits+(size_t)b*KP; int K=nmark[b];
+    const float* z=logits+moff[b]; int K=nmark[b];
     float mx=-INFINITY; for(int i=0;i<K;i++) mx=fmaxf(mx,z[i]);
     float s=0.f; for(int i=0;i<K;i++) s+=__expf(z[i]-mx);
     float t1=0.f,t2=0.f,ent=0.f;
@@ -331,9 +331,9 @@ void launch_gather(const __half* h,const int* rows,__half* m,int K,int D,hipStre
   hipLaunchKernelGGL((k_gather<__half>),dim3(K),dim3(256),0,st,h,rows,m,D); }
 void launch_bias_to_float(const __half* x,const __half* b,float* y,int n,hipStream_t st){
   hipLaunchKernelGGL(k_bias_to_float,dim3((n+255)/256),dim3(256),0,st,x,b,y,n); }
-void launch_act_head(const float* cls,int D,const float* logits,int KP,const int* nmark,
+void launch_act_head(const float* cls,int D,const float* logits,const int* moff,const int* nmark,
                      const __half* W0,const __half* B0,const __half* W2,const __half* B2,int n_act,float* out,int B,hipStream_t st){
-  hipLaunchKernelGGL(k_act_head,dim3(B),dim3(256),(D+4+256)*sizeof(float),st,cls,D,logits,KP,nmark,W0,B0,W2,B2,n_act,out); }
+  hipLaunchKernelGGL(k_act_head,dim3(B),dim3(256),(D+4+256)*sizeof(float),st,cls,D,logits,moff,nmark,W0,B0,W2,B2,n_act,out); }
 void launch_flash_wmma(const __half* qkv,__half* out,int ntiles,int H,int HD,int window,const int* vlen,
                        const int* soff,const int* tseq,const int* tq0,float scale,hipStream_t st){
   dim3 g((ntiles+3)/4,H), blk(128);
