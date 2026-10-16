@@ -5,7 +5,7 @@ services:
     build: { context: ., dockerfile: docker/Dockerfile }
     ports: ["8080:8080"]
     devices: ["/dev/kfd", "/dev/dri"]
-    group_add: ["44", "991"]          # video, render (numeric: the image has no such groups)
+    group_add: ["${VIDEO_GID:-44}", "${RENDER_GID:-991}"]   # host video/render GIDs (numeric: the image has no such groups); see README
     security_opt: ["seccomp=unconfined"]
     environment:
       LAYA_MODEL_DIR: /weights/${LAYA_VARIANT:-laya-en}

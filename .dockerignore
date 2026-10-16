@@ -1,7 +1,11 @@
+# keep the build context small: checkpoints, reference tensors and benchmark data never go into images
 weights
-golden
-bench
-ref
-tests
+golden*
 liblaya.so
 **/*.o
+**/__pycache__
+bench/eval/.venv
+bench/eval/data
+bench/eval/suites
+bench/eval/results
+.git

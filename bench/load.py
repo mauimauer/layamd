@@ -1,7 +1,7 @@
 """Concurrent HTTP load: C client threads, each sending single-question requests."""
-import json, sys, time, threading, urllib.request, statistics
+import json, os, sys, time, threading, urllib.request, statistics
 URL = "http://localhost:8080/v1/decide"
-src = open('/srv/forge/layamd/ref/gen_golden.py').read(); ns = {}; exec(src[src.index("LONG_STATE ="):src.index("def main")], ns)
+src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'ref', 'gen_golden.py')).read(); ns = {}; exec(src[src.index("LONG_STATE ="):src.index("def main")], ns)
 state = ns['LONG_STATE']
 import random
 MIXED = "--mixed" in sys.argv

@@ -5,7 +5,7 @@
 #include <cmath>
 #include <vector>
 #include <random>
-#include "../src/wgemm.h"
+#include "../../src/wgemm.h"
 #define CK(x) do{auto e=(x); if((int)e){printf("err %d @%d\n",(int)e,__LINE__);exit(1);} }while(0)
 int main(){
   hipblasHandle_t hb; CK(hipblasCreate(&hb)); float one=1,zero=0;

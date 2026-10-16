@@ -1,8 +1,9 @@
 # Feasibility probe: lean gfx1151-only ROCm image that builds + runs HIP/hipBLAS code.
+# Build from the repo root:  docker build -f bench/probes/Dockerfile -t laya-probe:gfx1151 .
 ARG UBUNTU=26.04
 FROM ubuntu:${UBUNTU} AS builder
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
-COPY amdrocm.gpg /etc/apt/keyrings/amdrocm.gpg
+COPY docker/amdrocm.gpg /etc/apt/keyrings/amdrocm.gpg
 RUN cat > /etc/apt/sources.list.d/amdrocm.sources <<'SRC'
 Types: deb
 URIs: https://stable.repo.amd.com/rocm/core/packages/ubuntu2604/
@@ -17,13 +18,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 ENV PATH=/opt/rocm/bin:$PATH
 WORKDIR /build
-COPY skel.cpp gemm.cpp ./
+COPY bench/probes/skel.cpp bench/probes/gemm.cpp ./
 RUN hipcc -O3 --offload-arch=gfx1151 -std=c++17 skel.cpp -o skel -lhipblas && \
     hipcc -O3 --offload-arch=gfx1151 -std=c++17 gemm.cpp -o gemm -lhipblas
 
 FROM ubuntu:26.04 AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
-COPY amdrocm.gpg /etc/apt/keyrings/amdrocm.gpg
+COPY docker/amdrocm.gpg /etc/apt/keyrings/amdrocm.gpg
 RUN cat > /etc/apt/sources.list.d/amdrocm.sources <<'SRC'
 Types: deb
 URIs: https://stable.repo.amd.com/rocm/core/packages/ubuntu2604/
