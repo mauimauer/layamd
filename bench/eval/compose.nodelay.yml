@@ -1,0 +1,4 @@
+# Overlay: run the stock image with bench/eval/patched/app.py (TCP_NODELAY) mounted over /app/app.py
+services:
+  laya:
+    volumes: ["./bench/eval/patched/app.py:/app/app.py:ro"]

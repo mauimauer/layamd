@@ -1,0 +1,13 @@
+# LAYA_VARIANT: laya-en (default) | laya-typed | laya-multi
+services:
+  laya:
+    image: laya:gfx1151
+    build: { context: ., dockerfile: docker/Dockerfile }
+    ports: ["8080:8080"]
+    devices: ["/dev/kfd", "/dev/dri"]
+    group_add: ["44", "991"]          # video, render (numeric: the image has no such groups)
+    security_opt: ["seccomp=unconfined"]
+    environment:
+      LAYA_MODEL_DIR: /weights/${LAYA_VARIANT:-laya-en}
+    volumes: ["./weights:/weights:ro"]
+    restart: unless-stopped

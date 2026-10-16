@@ -1,0 +1,601 @@
+<title>Laya gfx1151 Scorecard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Public+Sans:ital,wght@0,400;0,600;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one reading column of findings; charts break out to a wider measure; every figure is a
+   "panel" with its own controls row above it, as in a lab notebook. */
+:root {
+  --bg: #f4f6f8; --surface: #ffffff; --ink: #11161d; --ink-2: #4a5361; --ink-3: #78818f;
+  --rule: #dce1e8; --grid: #e9edf2; --accent: #3b2f8f; --accent-soft: #e9e6fb;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --ref: #8a93a1;
+  --good: #0ca30c; --warn: #fab219; --crit: #d03b3b;
+  --f-display: "Bricolage Grotesque", "Avenir Next", "Segoe UI", sans-serif;
+  --f-body: "Public Sans", "Helvetica Neue", Arial, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #111317; --surface: #191c21; --ink: #eef1f5; --ink-2: #b5bdc9; --ink-3: #848d9a;
+  --rule: #2c3139; --grid: #23272e; --accent: #b0a6f7; --accent-soft: #2a2648;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --ref: #7d8694; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #111317; --surface: #191c21; --ink: #eef1f5; --ink-2: #b5bdc9; --ink-3: #848d9a;
+  --rule: #2c3139; --grid: #23272e; --accent: #b0a6f7; --accent-soft: #2a2648;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --ref: #7d8694; color-scheme: dark }
+
+* { box-sizing: border-box }
+body { background: var(--bg); color: var(--ink); font: 400 15px/1.6 var(--f-body); padding-inline: 16px; padding-block: 0 64px }
+.wrap { max-width: 1080px; margin: 0 auto }
+h1, h2, h3 { font-family: var(--f-display); text-wrap: balance; margin: 0; line-height: 1.15 }
+h1 { font-size: clamp(2rem, 5vw, 3.1rem); font-weight: 700; letter-spacing: -0.02em }
+h2 { font-size: 1.6rem; font-weight: 700; letter-spacing: -0.01em }
+h3 { font-size: 1.08rem; font-weight: 500 }
+p { margin: 0; max-width: 68ch }
+a { color: var(--accent) }
+code, .mono { font-family: var(--f-mono); font-size: 0.86em }
+.eyebrow { font: 600 0.72rem/1 var(--f-mono); letter-spacing: 0.09em; text-transform: uppercase; color: var(--ink-3) }
+.muted { color: var(--ink-2) }
+.num { font-variant-numeric: tabular-nums }
+
+header.top { padding-block: 40px 28px; display: grid; gap: 14px; border-bottom: 1px solid var(--rule) }
+.spec { display: flex; flex-wrap: wrap; gap: 6px 18px; font: 400 0.8rem/1.4 var(--f-mono); color: var(--ink-2) }
+.spec b { color: var(--ink); font-weight: 600 }
+
+nav.toc { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--bg); border-bottom: 1px solid var(--rule);
+  display: flex; gap: 4px; overflow-x: auto; padding-block: 8px; scrollbar-width: none }
+nav.toc a { font: 600 0.8rem/1 var(--f-body); color: var(--ink-2); text-decoration: none; padding: 7px 10px; border-radius: 6px; white-space: nowrap }
+nav.toc a:hover, nav.toc a:focus-visible { background: var(--accent-soft); color: var(--ink); outline: none }
+
+section { padding-block: 44px 8px; display: grid; gap: 18px; scroll-margin-top: 56px }
+.lede { font-size: 1.02rem; color: var(--ink-2) }
+
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px }
+.tile { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 16px 16px 14px; display: grid; gap: 4px; align-content: start; min-width: 0 }
+.tile .v { font: 700 2rem/1.1 var(--f-display); font-variant-numeric: tabular-nums; letter-spacing: -0.01em }
+.tile .v small { font: 600 0.9rem var(--f-body); color: var(--ink-2); margin-left: 4px }
+.tile .k { font-size: 0.85rem; color: var(--ink-2) }
+
+.findings { display: grid; gap: 10px; counter-reset: f }
+.finding { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; align-items: baseline; background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 14px 16px }
+.finding > div { min-width: 0 }
+.pill { font: 600 0.7rem/1 var(--f-mono); letter-spacing: 0.05em; text-transform: uppercase; padding: 5px 7px; border-radius: 99px; white-space: nowrap; border: 1px solid currentColor }
+.pill.good { color: var(--good) } .pill.warn { color: #b07a00 } .pill.crit { color: var(--crit) } .pill.info { color: var(--accent) }
+:root[data-theme="dark"] .pill.warn { color: var(--warn) }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .pill.warn { color: var(--warn) } }
+.finding h3 { font-size: 1rem; margin-bottom: 2px }
+.finding p { font-size: 0.92rem; color: var(--ink-2) }
+
+.panel { background: var(--surface); border: 1px solid var(--rule); border-radius: 12px; padding: 16px; display: grid; gap: 12px; min-width: 0 }
+.panel-head { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; justify-content: space-between }
+.panel-head p { font-size: 0.86rem; color: var(--ink-2) }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center }
+.seg { display: inline-flex; border: 1px solid var(--rule); border-radius: 8px; overflow: hidden; flex-wrap: wrap }
+.seg button { font: 600 0.78rem/1 var(--f-body); color: var(--ink-2); background: transparent; border: 0; padding: 8px 10px; cursor: pointer }
+.seg button + button { border-left: 1px solid var(--rule) }
+.seg button[aria-pressed="true"] { background: var(--accent-soft); color: var(--ink) }
+.seg button:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px }
+select { font: 600 0.8rem var(--f-body); color: var(--ink); background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 7px 8px; max-width: 100% }
+label.ctl { font-size: 0.78rem; color: var(--ink-3); display: inline-flex; gap: 6px; align-items: center }
+
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 0.82rem; color: var(--ink-2) }
+.legend span { display: inline-flex; align-items: center; gap: 6px }
+.sw { width: 10px; height: 10px; border-radius: 50%; display: inline-block }
+.sw.line { width: 16px; height: 2px; border-radius: 1px }
+.sw.dash { width: 16px; height: 0; border-top: 2px dashed var(--ink-3); border-radius: 0; background: none !important }
+.sw.tick { width: 2px; height: 12px; border-radius: 0 }
+
+.chart { width: 100%; min-width: 0; position: relative }
+.chart svg { display: block; width: 100%; height: auto; overflow: visible }
+.chart text { fill: var(--ink-2); font: 400 11px var(--f-body) }
+.chart .axis text { fill: var(--ink-3); font: 400 10.5px var(--f-mono) }
+.chart .gridline { stroke: var(--grid); stroke-width: 1 }
+.chart .baseline { stroke: var(--rule); stroke-width: 1 }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px }
+.grid2 > * { min-width: 0 }
+
+.tip { position: fixed; z-index: 20; pointer-events: none; background: var(--surface); color: var(--ink); border: 1px solid var(--rule);
+  border-radius: 8px; padding: 8px 10px; font: 400 0.8rem/1.45 var(--f-body); box-shadow: 0 6px 24px rgb(0 0 0 / 0.14); max-width: 280px }
+.tip b { font-weight: 600 } .tip .r { display: flex; gap: 8px; align-items: center; font-variant-numeric: tabular-nums }
+
+.tbl-wrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: 10px }
+table { border-collapse: collapse; width: 100%; font-size: 0.84rem; font-variant-numeric: tabular-nums; background: var(--surface) }
+th, td { padding: 7px 10px; text-align: right; border-bottom: 1px solid var(--grid); white-space: nowrap }
+th:first-child, td:first-child { text-align: left }
+thead th { font: 600 0.72rem var(--f-mono); letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink-3); position: sticky; top: 0; background: var(--surface) }
+td.d { color: var(--ink-3); font-size: 0.78rem }
+tbody tr:hover { background: var(--accent-soft) }
+details summary { cursor: pointer; font-weight: 600; font-size: 0.86rem; color: var(--accent) }
+details[open] summary { margin-bottom: 10px }
+
+.method { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px 28px; font-size: 0.9rem; color: var(--ink-2) }
+.method h3 { color: var(--ink); margin-bottom: 4px; font-size: 0.98rem }
+.method ul { margin: 0; padding-left: 18px; display: grid; gap: 4px }
+footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid var(--rule); font: 400 0.78rem var(--f-mono); color: var(--ink-3) }
+@media (max-width: 520px) { .tile .v { font-size: 1.7rem } section { padding-block: 32px 4px } }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto } }
+</style>
+
+<div class="wrap">
+<header class="top">
+  <span class="eyebrow">layamd · decision-model benchmark</span>
+  <h1>Laya gfx1151 Scorecard</h1>
+  <p class="lede" id="lede">How well and how fast the custom HIP engine makes decisions, measured on 50 public test suites and compared case for case against upstream Laya on PyTorch.</p>
+  <div class="spec" id="spec"></div>
+</header>
+<nav class="toc" aria-label="Sections">
+  <a href="#summary">Summary</a><a href="#parity">Parity</a><a href="#quality">Quality</a><a href="#typed">Typed decisions</a>
+  <a href="#calibration">Calibration</a><a href="#robustness">Robustness</a><a href="#speed">Speed</a><a href="#method">Method</a>
+</nav>
+
+<section id="summary">
+  <div class="tiles" id="tiles"></div>
+  <div class="findings" id="findings"></div>
+</section>
+
+<section id="parity">
+  <span class="eyebrow">Engine correctness</span>
+  <h2>Same answers as upstream PyTorch</h2>
+  <p class="lede">Every suite was built with upstream's own protocol (seed 13, same rows, prompts and option sampling), so each of our answers can be compared with the published Tesla T4 run. The chart counts suites by how many more or fewer questions our engine got right.</p>
+  <div class="panel">
+    <div class="panel-head"><h3>Difference in correct answers per suite, ours − T4</h3><div class="legend" id="parity-legend"></div></div>
+    <div class="grid2"><div class="chart" id="parity-chart"></div><div class="chart" id="parity-ece"></div></div>
+  </div>
+</section>
+
+<section id="quality">
+  <span class="eyebrow">Decision quality</span>
+  <h2>Accuracy by suite</h2>
+  <p class="lede">Each row is one suite of 116–2,000 questions. The grey tick is chance for that question shape. Switch metric to see calibration error, Brier score, or accuracy when the model only answers its most confident half.</p>
+  <div class="panel">
+    <div class="controls">
+      <div class="seg" id="fam-seg" role="group" aria-label="Suite family"></div>
+      <div class="seg" id="metric-seg" role="group" aria-label="Metric"></div>
+    </div>
+    <div class="legend" id="q-legend"></div>
+    <div class="chart" id="dot-chart"></div>
+    <details><summary>Table view</summary><div class="tbl-wrap" id="q-table"></div></details>
+  </div>
+  <div class="panel">
+    <div class="panel-head"><h3>Family averages</h3><p>Macro average of suite accuracy; MASSIVE and XNLI exclude English.</p></div>
+    <div class="chart" id="fam-chart"></div>
+  </div>
+</section>
+
+<section id="typed">
+  <span class="eyebrow">Business decisions</span>
+  <h2>Typed decisions: where fine-tuning pays</h2>
+  <p class="lede">LocalLLaMA/typed-decisions has 2,000 decisions in four real workflows, each mixing choice, score and yes/no questions against JSON state. It is the closest public set to what an agent asks Laya in production.</p>
+  <div class="grid2">
+    <div class="panel"><div class="panel-head"><h3>Accuracy by workflow</h3></div><div class="legend" id="td-legend"></div><div class="chart" id="td-chart"></div></div>
+    <div class="panel"><div class="panel-head"><h3>Accuracy by question type</h3></div><div class="chart" id="td-type-chart"></div></div>
+  </div>
+  <div class="tbl-wrap" id="td-table"></div>
+</section>
+
+<section id="calibration">
+  <span class="eyebrow">Can you trust the confidence?</span>
+  <h2>Calibration and selective answering</h2>
+  <p class="lede">A decision engine is useful when its confidence tells you when to escalate. The left chart compares stated confidence with observed accuracy; points on the diagonal are well calibrated. The right chart shows accuracy if you only accept the most confident share of answers.</p>
+  <div class="panel">
+    <div class="controls"><label class="ctl" for="cal-suite">Suite</label><select id="cal-suite"></select></div>
+    <div class="legend" id="cal-legend"></div>
+    <div class="grid2"><div class="chart" id="rel-chart"></div><div class="chart" id="cov-chart"></div></div>
+    <p class="muted" id="cal-note" style="font-size:0.86rem"></p>
+  </div>
+</section>
+
+<section id="robustness">
+  <span class="eyebrow">Stability</span>
+  <h2>Does the order of options change the answer?</h2>
+  <p class="lede">The same 200 questions asked twice, with the options shuffled the second time. A flip is a changed decision. Upstream measured the same thing on T4.</p>
+  <div class="panel"><div class="legend" id="rb-legend"></div><div class="chart" id="rb-chart"></div></div>
+</section>
+
+<section id="speed">
+  <span class="eyebrow">Speed</span>
+  <h2>Latency and throughput over HTTP</h2>
+  <p class="lede">Measured from a client on the same host over keep-alive connections, which is how real HTTP clients behave. The fixed server adds one line, <code>disable_nagle_algorithm = True</code>; the shipped server stalls each keep-alive response by about 40 ms.</p>
+  <div class="panel">
+    <div class="panel-head"><h3>Latency per request by number of questions</h3><p>p50 of 50 sequential requests, upstream's latency protocol.</p></div>
+    <div class="legend" id="qpr-legend"></div>
+    <div class="chart" id="qpr-chart"></div>
+  </div>
+  <div class="grid2">
+    <div class="panel"><div class="panel-head"><h3>Latency by input length</h3><p>One 4-way choice, p50.</p></div><div class="chart" id="len-chart"></div></div>
+    <div class="panel"><div class="panel-head"><h3>Shipped vs fixed server</h3><p>Single-question requests, p50.</p></div><div class="chart" id="nagle-chart"></div></div>
+  </div>
+  <div class="panel">
+    <div class="controls"><div class="seg" id="srv-seg" role="group" aria-label="Server build"></div></div>
+    <div class="legend" id="conc-legend"></div>
+    <div class="grid2"><div class="chart" id="thr-chart"></div><div class="chart" id="p50-chart"></div></div>
+    <p class="muted" style="font-size:0.86rem">Concurrent clients replay a fixed, seeded sample of benchmark requests (mixed lengths and question counts). The server's continuous batcher merges whatever is queued into one GPU pass.</p>
+  </div>
+</section>
+
+<section id="method">
+  <span class="eyebrow">Method</span>
+  <h2>How this was measured</h2>
+  <div class="method" id="method-body"></div>
+</section>
+<footer id="foot"></footer>
+</div>
+<div class="tip" id="tip" hidden></div>
+
+<script id="data" type="application/json">/*DATA*/</script>
+<script>
+(() => {
+const D = JSON.parse(document.getElementById("data").textContent);
+const V = ["laya-en", "laya-multi", "laya-typed"].filter(v => D.variants[v]);
+const NAME = { "laya-en": "laya (English)", "laya-multi": "laya-multilingual", "laya-typed": "laya-typed-decisions" };
+const UP = { "laya-en": "laya", "laya-multi": "laya-multilingual" };
+const COL = { "laya-en": "var(--s1)", "laya-multi": "var(--s2)", "laya-typed": "var(--s3)" };
+const SUITES = Object.keys(D.suites);
+const S = (v, s) => (D.variants[v].suites || {})[s] || {};
+const NS = "http://www.w3.org/2000/svg";
+const fmt = (x, d = 3) => x == null || isNaN(x) ? "–" : (+x).toFixed(d);
+const pct = (x, d = 1) => x == null ? "–" : (100 * x).toFixed(d) + "%";
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const prettySuite = s => s.replace("massive_intent.", "MASSIVE intent · ").replace("massive_scenario.", "MASSIVE scenario · ")
+  .replace("xnli.", "XNLI · ").replace("en.", "").replace("typed_decisions", "typed-decisions")
+  .replace("banking77_full", "Banking77 (77 options)").replace("prompt_injections", "prompt injections")
+  .replace("sst5", "SST-5 (score)").replace("ag_news", "AG News").replace("boolq", "BoolQ").replace("emotion", "DAIR Emotion");
+const family = s => s === "typed_decisions" ? "typed" : s.startsWith("en.") ? "english" : s.split(".")[0];
+
+/* ---------- tooltip ---------- */
+const tip = $("tip");
+function showTip(e, html) { tip.innerHTML = html; tip.hidden = false; moveTip(e) }
+function moveTip(e) {
+  const pad = 14, w = tip.offsetWidth, h = tip.offsetHeight;
+  let x = e.clientX + pad, y = e.clientY + pad;
+  if (x + w > innerWidth - 8) x = e.clientX - w - pad;
+  if (y + h > innerHeight - 8) y = e.clientY - h - pad;
+  tip.style.left = Math.max(8, x) + "px"; tip.style.top = Math.max(8, y) + "px";
+}
+const hideTip = () => tip.hidden = true;
+const sw = c => `<span class="sw" style="background:${c}"></span>`;
+
+/* ---------- tiny svg kit ---------- */
+function el(tag, attrs = {}, parent) {
+  const n = document.createElementNS(NS, tag);
+  for (const k in attrs) n.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(n);
+  return n;
+}
+function svgIn(host, w, h) {
+  host.innerHTML = "";
+  const s = el("svg", { viewBox: `0 0 ${w} ${h}`, role: "img" }, host);
+  return s;
+}
+const lin = (d0, d1, r0, r1) => x => r0 + (x - d0) / (d1 - d0 || 1) * (r1 - r0);
+const logS = (d0, d1, r0, r1) => x => r0 + (Math.log(x) - Math.log(d0)) / (Math.log(d1) - Math.log(d0)) * (r1 - r0);
+function niceTicks(lo, hi, n = 5) {
+  const span = hi - lo, step0 = span / n, mag = 10 ** Math.floor(Math.log10(step0));
+  const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => span / s <= n) || mag * 10;
+  const out = []; for (let t = Math.ceil(lo / step) * step; t <= hi + 1e-9; t += step) out.push(+t.toFixed(10));
+  return out;
+}
+function hover(node, html) {
+  node.addEventListener("pointerenter", e => showTip(e, html()));
+  node.addEventListener("pointermove", moveTip);
+  node.addEventListener("pointerleave", hideTip);
+}
+const W = host => Math.max(300, Math.round(host.clientWidth || 600));
+function legend(id, items) {
+  $(id).innerHTML = items.map(([label, c, kind]) =>
+    `<span><span class="sw ${kind || ""}" style="background:${c}"></span>${esc(label)}</span>`).join("");
+}
+
+/* Line chart: series [{name,color,dash,pts:[[x,y]...]}] */
+function lineChart(host, series, o) {
+  const w = W(host), h = o.h || 260, m = { l: 48, r: 16, t: 12, b: 36 };
+  const svg = svgIn(host, w, h);
+  const xs = series.flatMap(s => s.pts.map(p => p[0])), ys = series.flatMap(s => s.pts.map(p => p[1]));
+  const x0 = o.x0 ?? Math.min(...xs), x1 = o.x1 ?? Math.max(...xs);
+  const y0 = o.y0 ?? 0, y1 = o.y1 ?? Math.max(...ys) * 1.08;
+  const X = (o.logx ? logS : lin)(x0, x1, m.l, w - m.r), Y = lin(y0, y1, h - m.b, m.t);
+  const g = el("g", { class: "axis" }, svg);
+  for (const t of (o.yticks || niceTicks(y0, y1, 5))) {
+    el("line", { x1: m.l, x2: w - m.r, y1: Y(t), y2: Y(t), class: t === y0 ? "baseline" : "gridline" }, g);
+    el("text", { x: m.l - 6, y: Y(t) + 3.5, "text-anchor": "end" }, g).textContent = o.yfmt ? o.yfmt(t) : t;
+  }
+  for (const t of (o.xticks || niceTicks(x0, x1, 6)))
+    el("text", { x: X(t), y: h - m.b + 16, "text-anchor": "middle" }, g).textContent = o.xfmt ? o.xfmt(t) : t;
+  if (o.xlabel) el("text", { x: (m.l + w - m.r) / 2, y: h - 4, "text-anchor": "middle" }, svg).textContent = o.xlabel;
+  if (o.ylabel) el("text", { x: m.l, y: m.t - 2 + 0, "text-anchor": "start", dy: -2 }, svg).textContent = "";
+  if (o.diag) el("line", { x1: X(x0), y1: Y(y0), x2: X(x1), y2: Y(y1), stroke: "var(--ref)", "stroke-dasharray": "3 4", "stroke-width": 1.2 }, svg);
+  for (const s of series) {
+    const d = s.pts.map((p, i) => (i ? "L" : "M") + X(p[0]).toFixed(1) + " " + Y(p[1]).toFixed(1)).join("");
+    el("path", { d, fill: "none", stroke: s.color, "stroke-width": 2, "stroke-dasharray": s.dash || "", "stroke-linejoin": "round", "stroke-linecap": "round" }, svg);
+    for (const p of s.pts) {
+      const c = el("circle", { cx: X(p[0]), cy: Y(p[1]), r: s.dash ? 3.5 : 4.5, fill: s.dash ? "var(--surface)" : s.color,
+        stroke: s.dash ? s.color : "var(--surface)", "stroke-width": 2 }, svg);
+      const hit = el("circle", { cx: X(p[0]), cy: Y(p[1]), r: 11, fill: "transparent" }, svg);
+      hover(hit, () => `${sw(s.color)} <b>${esc(s.name)}</b><br>${o.tip ? o.tip(p, s) : p.join(", ")}`);
+    }
+  }
+}
+
+/* Grouped horizontal bars: groups [{label, vals:[{key,color,v,tip}]}] */
+function groupedBars(host, groups, o) {
+  const w = W(host), nb = groups[0].vals.length, bh = 9, gap = 2, gh = nb * (bh + gap) + 14;
+  const lw = Math.min(170, w * 0.36), m = { l: lw, r: 44, t: 6, b: 24 }, h = m.t + groups.length * gh + m.b;
+  const svg = svgIn(host, w, h);
+  const xmax = o.xmax ?? 1, X = lin(0, xmax, m.l, w - m.r);
+  const g = el("g", { class: "axis" }, svg);
+  for (const t of niceTicks(0, xmax, w < 420 ? 3 : 5)) {
+    el("line", { x1: X(t), x2: X(t), y1: m.t, y2: h - m.b, class: t === 0 ? "baseline" : "gridline" }, g);
+    el("text", { x: X(t), y: h - 6, "text-anchor": "middle" }, g).textContent = o.xfmt ? o.xfmt(t) : t;
+  }
+  groups.forEach((gr, i) => {
+    const y = m.t + i * gh + 7;
+    el("text", { x: m.l - 8, y: y + (nb * (bh + gap)) / 2 + 3, "text-anchor": "end" }, svg).textContent = gr.label;
+    gr.vals.forEach((b, j) => {
+      const yy = y + j * (bh + gap), x1 = X(Math.max(0, b.v)), wd = Math.max(1, x1 - X(0));
+      el("path", { d: `M${X(0)} ${yy}h${Math.max(0, wd - 3)}a3 3 0 0 1 3 3v${bh - 6}a3 3 0 0 1 -3 3h${-Math.max(0, wd - 3)}z`, fill: b.color }, svg);
+      if (o.ref && b.ref != null) el("line", { x1: X(b.ref), x2: X(b.ref), y1: yy - 1.5, y2: yy + bh + 1.5, stroke: "var(--ink)", "stroke-width": 2 }, svg);
+      if (j === nb - 1 || o.labelAll) {}
+      const hit = el("rect", { x: m.l, y: yy - 1, width: w - m.l - m.r, height: bh + 2, fill: "transparent" }, svg);
+      hover(hit, () => `<b>${esc(gr.label)}</b><br>${sw(b.color)} ${esc(b.key)}: <b>${b.fmt ? b.fmt(b.v) : fmt(b.v)}</b>${b.tip ? "<br>" + b.tip : ""}`);
+    });
+    const best = gr.vals.reduce((a, b) => b.v > a.v ? b : a);
+    el("text", { x: X(Math.max(0, best.v)) + 6, y: y + gr.vals.indexOf(best) * (bh + gap) + bh - 1, "font-variant-numeric": "tabular-nums" }, svg)
+      .textContent = best.fmt ? best.fmt(best.v) : fmt(best.v, 2);
+  });
+}
+
+/* ---------- header & summary ---------- */
+const en = D.variants["laya-en"], multi = D.variants["laya-multi"], typed = D.variants["laya-typed"];
+const up = D.upstream;
+$("spec").innerHTML = [
+  ["Engine", "HIP · gfx1151 (Strix Halo) · FP16 GEMM / FP32 residual"],
+  ["Reference", `PyTorch ${up.meta.torch.split("+")[0]} · ${up.meta.gpu}`],
+  ["Run", (en || multi || typed).timestamp],
+  ["Suites", `${SUITES.length} · ${V.length} checkpoints`],
+].map(([k, v]) => `<span>${k} <b>${esc(v)}</b></span>`).join("");
+
+/* parity stats */
+const parity = {};
+for (const v of V) if (UP[v]) {
+  const rows = [];
+  for (const s of SUITES) {
+    const a = S(v, s), u = (up.suites[s] || {})[UP[v]];
+    if (!a.n || !u) continue;
+    rows.push({ s, d: Math.round((a.accuracy - u.accuracy) * a.n), n: a.n, dacc: a.accuracy - u.accuracy, dece: a.ece - u.ece });
+  }
+  parity[v] = rows;
+}
+const allPar = Object.values(parity).flat();
+const within1 = allPar.filter(r => Math.abs(r.d) <= 1).length;
+const maxAbs = Math.max(...allPar.map(r => Math.abs(r.d)));
+const totalQ = V.reduce((t, v) => t + SUITES.reduce((a, s) => a + (S(v, s).n || 0), 0), 0);
+
+const spd = v => D.variants[v].speed || {}, spdShip = v => D.variants[v].speed_shipped || {};
+const q1 = v => spd(v).questions_per_request?.["1"]?.p50_ms;
+const peak = v => Math.max(...(spd(v).concurrency || []).map(r => r.questions_s));
+const tdTyped = typed && S("laya-typed", "typed_decisions"), tdEn = en && S("laya-en", "typed_decisions");
+
+$("tiles").innerHTML = [
+  [`${within1}<small>/ ${allPar.length}</small>`, "suite runs within one answer of upstream PyTorch (worst: " + maxAbs + ")"],
+  tdTyped && [fmt(tdTyped.accuracy, 3), `typed-decisions accuracy, fine-tuned checkpoint (base English: ${fmt(tdEn.accuracy, 3)})`],
+  en && [`${fmt(q1("laya-en"), 1)}<small>ms</small>`, `one decision, English model, p50 over HTTP (T4 PyTorch: ${up.latency.laya["1_questions"].p50_ms} ms)`],
+  multi && [`${Math.round(peak("laya-multi"))}<small>q/s</small>`, `peak throughput, multilingual model (English: ${Math.round(peak("laya-en"))} q/s)`],
+].filter(Boolean).map(([v, k]) => `<div class="tile"><div class="v">${v}</div><div class="k">${k}</div></div>`).join("");
+
+const shipped1 = en && spdShip("laya-en").questions_per_request?.["1"]?.p50_ms;
+const englishHeld = v => ["en.sst5", "en.emotion", "en.prompt_injections"].map(s => S(v, s).accuracy);
+const xnliOther = v => { const a = SUITES.filter(s => s.startsWith("xnli.") && s !== "xnli.en").map(s => S(v, s).accuracy); return a.reduce((x, y) => x + y, 0) / a.length };
+const F = [
+  ["good", "Correct", "The engine reproduces upstream's decisions",
+    `Across ${allPar.length} suite runs and ${totalQ.toLocaleString()} questions, accuracy matches the PyTorch T4 run to within one answer in ${within1} of ${allPar.length} suites. The remaining differences come from near-tie probabilities, not a systematic shift.`],
+  ["crit", "Speed bug", "Shipped server adds ~40 ms to every keep-alive request",
+    `The HTTP handler writes headers and body separately with Nagle's algorithm on, so a pooled client waits for a delayed ACK. One decision takes ${fmt(shipped1, 1)} ms shipped and ${fmt(q1("laya-en"), 1)} ms with <code>disable_nagle_algorithm = True</code> in <code>server/app.py</code>. Peak throughput is unchanged; single-client throughput rises about 6×.`],
+  ["warn", "Gap", "Questions with more than 64 options are rejected",
+    `The engine gathers at most 64 option markers (<code>Engine::KP</code>), so the Banking77 suite (77 labels in one question) returns HTTP 400 on every checkpoint. Upstream PyTorch accepts it and scores 0.425. Callers must shortlist or use a tournament over the labels.`],
+  ["info", "Model", "Laya is strong at classic NLU and weak at business decisions out of the box",
+    `English: XNLI ${fmt(S("laya-en", "xnli.en").accuracy, 2)}, AG News ${fmt(S("laya-en", "en.ag_news").accuracy, 2)}, but typed-decisions only ${fmt(tdEn?.accuracy, 3)} zero-shot (majority class 0.461). The fine-tuned checkpoint reaches ${fmt(tdTyped?.accuracy, 3)}. Held-out English tasks (SST-5, emotion, prompt injection): ${englishHeld("laya-en").map(x => fmt(x, 2)).join(" / ")}.`],
+  ["info", "Routing", "Use the multilingual checkpoint for anything not in English",
+    `On XNLI outside English the multilingual model averages ${fmt(xnliOther("laya-multi"), 3)} against ${fmt(xnliOther("laya-en"), 3)} for the English model, which drops close to chance in Hindi, Korean, Tamil and Swahili while staying confident. It is also about 2× faster here.`],
+];
+$("findings").innerHTML = F.map(([k, tag, h, p]) => `<div class="finding"><span class="pill ${k}">${tag}</span><div><h3>${h}</h3><p>${p}</p></div></div>`).join("");
+
+/* ---------- parity charts ---------- */
+function drawParity() {
+  const vs = V.filter(v => parity[v]);
+  legend("parity-legend", vs.map(v => [NAME[v], `var(--s${V.indexOf(v) + 1})`]));
+  const bins = [-3, -2, -1, 0, 1, 2, 3];
+  const groups = bins.map(b => ({ label: (b > 0 ? "+" : "") + b + (Math.abs(b) === 1 ? " answer" : " answers"),
+    vals: vs.map(v => { const rs = parity[v].filter(r => Math.max(-3, Math.min(3, r.d)) === b);
+      return { key: NAME[v], color: COL[v], v: rs.length, fmt: x => x + " suites",
+        tip: rs.length ? rs.slice(0, 8).map(r => esc(prettySuite(r.s))).join("<br>") + (rs.length > 8 ? "<br>…" : "") : "" } }) }));
+  groupedBars($("parity-chart"), groups.filter(g => g.vals.some(x => x.v) || Math.abs(+g.label.split(" ")[0]) <= 1), { xmax: Math.max(...groups.flatMap(g => g.vals.map(x => x.v))) * 1.1 });
+  // ECE difference scatter: ours vs upstream ECE
+  const host = $("parity-ece"), w = W(host), h = 280, m = { l: 44, r: 12, t: 22, b: 36 };
+  const svg = svgIn(host, w, h);
+  const mx = Math.max(0.8, ...allPar.map(r => 0));
+  const pts = vs.flatMap(v => SUITES.filter(s => S(v, s).n && up.suites[s]?.[UP[v]]).map(s => ({ v, s, a: up.suites[s][UP[v]].ece, b: S(v, s).ece })));
+  const lim = Math.min(1, Math.ceil(Math.max(...pts.flatMap(p => [p.a, p.b])) * 10) / 10);
+  const X = lin(0, lim, m.l, w - m.r), Y = lin(0, lim, h - m.b, m.t), g = el("g", { class: "axis" }, svg);
+  for (const t of niceTicks(0, lim, 4)) {
+    el("line", { x1: m.l, x2: w - m.r, y1: Y(t), y2: Y(t), class: t ? "gridline" : "baseline" }, g);
+    el("text", { x: m.l - 6, y: Y(t) + 3.5, "text-anchor": "end" }, g).textContent = t;
+    el("text", { x: X(t), y: h - m.b + 15, "text-anchor": "middle" }, g).textContent = t;
+  }
+  el("text", { x: m.l, y: 12 }, svg).textContent = "Calibration error (ECE): ours, by suite";
+  el("text", { x: w - m.r, y: h - 4, "text-anchor": "end" }, svg).textContent = "upstream T4 ECE →";
+  el("line", { x1: X(0), y1: Y(0), x2: X(lim), y2: Y(lim), stroke: "var(--ref)", "stroke-dasharray": "3 4" }, svg);
+  for (const p of pts) {
+    const c = el("circle", { cx: X(p.a), cy: Y(p.b), r: 4, fill: COL[p.v], stroke: "var(--surface)", "stroke-width": 1.5, "fill-opacity": 0.85 }, svg);
+    hover(c, () => `<b>${esc(prettySuite(p.s))}</b><br>${sw(COL[p.v])} ${NAME[p.v]}<br>ECE ours ${fmt(p.b)} · T4 ${fmt(p.a)}`);
+  }
+}
+
+/* ---------- quality dot plot ---------- */
+const FAMS = [["all", "All"], ["english", "English tasks"], ["typed", "Typed decisions"], ["massive_intent", "MASSIVE intent"], ["massive_scenario", "MASSIVE scenario"], ["xnli", "XNLI"]];
+const METRICS = [["accuracy", "Accuracy", true, [0, 1]], ["macro_f1", "Macro F1", true, [0, 1]], ["acc_at_50_coverage", "Acc. @ 50% coverage", true, [0, 1]],
+  ["ece", "ECE (lower better)", false, null], ["brier", "Brier (lower better)", false, null]];
+let qFam = "all", qMetric = "accuracy";
+try { qFam = localStorage.getItem("laya.fam") || "all"; qMetric = localStorage.getItem("laya.metric") || "accuracy" } catch (e) {}
+function seg(id, opts, cur, on) {
+  const host = $(id);
+  host.innerHTML = opts.map(([k, l]) => `<button type="button" data-k="${k}" aria-pressed="${k === cur}">${l}</button>`).join("");
+  host.onclick = e => { const b = e.target.closest("button"); if (!b) return;
+    host.querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", x === b)); on(b.dataset.k) };
+}
+function drawDots() {
+  const host = $("dot-chart"), w = W(host);
+  const suites = SUITES.filter(s => qFam === "all" || family(s) === qFam);
+  const [mk, mlabel, higher, dom] = METRICS.find(m => m[0] === qMetric);
+  const vals = suites.flatMap(s => V.map(v => S(v, s)[mk]).filter(x => x != null));
+  const x1 = dom ? dom[1] : Math.min(2, Math.ceil(Math.max(...vals) * 10) / 10 || 1);
+  const rh = 22, lw = Math.min(190, w * 0.38), m = { l: lw, r: 18, t: 8, b: 28 }, h = m.t + suites.length * rh + m.b;
+  const svg = svgIn(host, w, h), X = lin(0, x1, m.l, w - m.r), g = el("g", { class: "axis" }, svg);
+  for (const t of niceTicks(0, x1, w < 460 ? 4 : 5)) {
+    el("line", { x1: X(t), x2: X(t), y1: m.t, y2: h - m.b, class: t ? "gridline" : "baseline" }, g);
+    el("text", { x: X(t), y: h - 8, "text-anchor": "middle" }, g).textContent = t;
+  }
+  suites.forEach((s, i) => {
+    const y = m.t + i * rh + rh / 2, row = V.map(v => [v, S(v, s)]);
+    if (i % 2 === 0) el("rect", { x: 0, y: y - rh / 2, width: w, height: rh, fill: "var(--grid)", "fill-opacity": 0.45 }, svg);
+    el("text", { x: m.l - 10, y: y + 3.5, "text-anchor": "end" }, svg).textContent = prettySuite(s).replace("MASSIVE ", "").replace(" · ", " · ");
+    const present = row.filter(([, r]) => r[mk] != null);
+    if (!present.length) {
+      const err = row.find(([, r]) => r.error);
+      el("text", { x: X(0) + 6, y: y + 3.5, fill: "var(--crit)" }, svg).textContent = err ? "not supported: " + err[1].error.replace(/question 'intent': /, "") : "–";
+      return;
+    }
+    const xs = present.map(([, r]) => X(r[mk]));
+    el("line", { x1: Math.min(...xs), x2: Math.max(...xs), y1: y, y2: y, stroke: "var(--rule)", "stroke-width": 2 }, svg);
+    if (qMetric === "accuracy" || qMetric === "acc_at_50_coverage") {
+      const ch = present[0][1].chance;
+      if (ch) el("line", { x1: X(ch), x2: X(ch), y1: y - 7, y2: y + 7, stroke: "var(--ref)", "stroke-width": 2 }, svg);
+    }
+    for (const [v, r] of present) el("circle", { cx: X(r[mk]), cy: y, r: 5.5, fill: COL[v], stroke: "var(--surface)", "stroke-width": 2 }, svg);
+    const hit = el("rect", { x: 0, y: y - rh / 2, width: w, height: rh, fill: "transparent" }, svg);
+    hover(hit, () => `<b>${esc(prettySuite(s))}</b> <span class="muted">n=${present[0][1].n}${D.suites[s].held_out === false ? " · in training mix" : ""}</span>` +
+      present.map(([v, r]) => { const u = UP[v] && up.suites[s]?.[UP[v]];
+        return `<div class="r">${sw(COL[v])} ${NAME[v]}: <b>${fmt(r[mk])}</b>${u && u[mk] != null ? ` <span class="muted">T4 ${fmt(u[mk])}</span>` : ""}</div>` }).join("") +
+      (present[0][1].chance && mk.startsWith("acc") ? `<div class="muted">chance ${fmt(present[0][1].chance)}</div>` : ""));
+  });
+  // table
+  const cols = ["accuracy", "macro_f1", "ece", "brier", "nll", "acc_at_50_coverage"];
+  $("q-table").innerHTML = `<table><thead><tr><th>Suite</th><th>n</th>${V.map(v => cols.map(c => `<th>${NAME[v].replace("laya-", "").replace("laya ", "").replace(/[()]/g, "")} ${c.replace("acc_at_50_coverage", "acc@50").replace("macro_", "")}</th>`).join("")).join("")}<th>T4 acc (en / multi)</th></tr></thead><tbody>` +
+    suites.map(s => `<tr><td>${esc(prettySuite(s))}</td><td>${S(V[0], s).n || S(V[0], s).dropped}</td>${V.map(v => cols.map(c => `<td>${fmt(S(v, s)[c])}</td>`).join("")).join("")}<td class="d">${["laya", "laya-multilingual"].map(m => fmt(up.suites[s]?.[m]?.accuracy)).join(" / ")}</td></tr>`).join("") + "</tbody></table>";
+}
+function drawFamilies() {
+  const fams = [["English tasks", s => s.startsWith("en.") && S("laya-en", s).n], ["Typed decisions", s => s === "typed_decisions"],
+    ["MASSIVE intent, English", s => s === "massive_intent.en"], ["MASSIVE intent, 13 other", s => s.startsWith("massive_intent.") && s !== "massive_intent.en"],
+    ["MASSIVE scenario, 13 other", s => s.startsWith("massive_scenario.") && s !== "massive_scenario.en"],
+    ["XNLI, English", s => s === "xnli.en"], ["XNLI, 14 other", s => s.startsWith("xnli.") && s !== "xnli.en"]];
+  groupedBars($("fam-chart"), fams.map(([label, f]) => ({ label, vals: V.map(v => {
+    const a = SUITES.filter(f).map(s => S(v, s).accuracy).filter(x => x != null);
+    return { key: NAME[v], color: COL[v], v: a.reduce((x, y) => x + y, 0) / a.length, tip: `${a.length} suite${a.length > 1 ? "s" : ""}` } }) })), {});
+}
+
+/* ---------- typed decisions ---------- */
+function drawTyped() {
+  legend("td-legend", V.map(v => [NAME[v], COL[v]]).concat([["majority-class baseline 0.461", "var(--ink)", "tick"]]));
+  const wfs = Object.keys(D.variants[V[0]].typed_workflows || {});
+  groupedBars($("td-chart"), wfs.map(wf => ({ label: wf.replace(/_/g, " "),
+    vals: V.map(v => { const r = D.variants[v].typed_workflows[wf]; return { key: NAME[v], color: COL[v], v: r.accuracy, tip: `n=${r.n} · ECE ${fmt(r.ece)} · soft acc ${fmt(r.soft_acc)}` } }) })), {});
+  const types = ["choice", "score", "noul"];
+  groupedBars($("td-type-chart"), types.map(t => ({ label: t === "noul" ? "yes / no" : t,
+    vals: V.map(v => { const r = S(v, "typed_decisions").by_type?.[t] || {}; return { key: NAME[v], color: COL[v], v: r.accuracy || 0, tip: `n=${r.n} · chance ${fmt(r.chance)} · ECE ${fmt(r.ece)}` } }) })), {});
+  const rows = [["Accuracy", "accuracy"], ["Macro F1", "macro_f1"], ["ECE", "ece"], ["Brier", "brier"], ["Soft accuracy vs teacher", "soft_acc"],
+    ["Total variation vs teacher", "tv"], ["Score MAE (levels)", "score_mae"], ["Score within one level", "within_1"], ["Accuracy @ 50% coverage", "acc_at_50_coverage"]];
+  $("td-table").innerHTML = `<table><thead><tr><th>typed-decisions, 2,000 questions</th>${V.map(v => `<th>${NAME[v]}</th>`).join("")}<th>T4 laya / multilingual</th></tr></thead><tbody>` +
+    rows.map(([l, k]) => `<tr><td>${l}</td>${V.map(v => `<td>${fmt(S(v, "typed_decisions")[k])}</td>`).join("")}<td class="d">${["laya", "laya-multilingual"].map(m => fmt(k in (up.suites.typed_decisions?.[m] || {}) ? up.suites.typed_decisions[m][k] : null)).join(" / ")}</td></tr>`).join("") + "</tbody></table>";
+}
+
+/* ---------- calibration ---------- */
+let calSuite = "typed_decisions";
+function drawCal() {
+  const sel = $("cal-suite");
+  if (!sel.options.length) {
+    sel.innerHTML = SUITES.filter(s => V.some(v => S(v, s).n)).map(s => `<option value="${s}">${esc(prettySuite(s))}</option>`).join("");
+    sel.value = calSuite; sel.onchange = () => { calSuite = sel.value; drawCal() };
+  }
+  const vs = V.filter(v => S(v, calSuite).n);
+  legend("cal-legend", vs.map(v => [NAME[v], COL[v], "line"]).concat([["perfect calibration", "var(--ref)", "dash"]]));
+  lineChart($("rel-chart"), vs.map(v => ({ name: NAME[v], color: COL[v], pts: S(v, calSuite).reliability.map(b => [b.conf, b.acc, b.n]) })),
+    { x0: 0, x1: 1, y0: 0, y1: 1, diag: true, xlabel: "stated confidence →", yticks: [0, .25, .5, .75, 1], xticks: [0, .25, .5, .75, 1],
+      tip: p => `confidence ${fmt(p[0], 2)} → accuracy <b>${fmt(p[1], 2)}</b><br>${p[2]} questions` });
+  lineChart($("cov-chart"), vs.map(v => ({ name: NAME[v], color: COL[v], pts: S(v, calSuite).coverage_curve.map(c => [c.coverage, c.accuracy]) })),
+    { x0: 0, x1: 1, y0: 0, y1: 1, xlabel: "share of questions answered (most confident first) →", yticks: [0, .25, .5, .75, 1], xticks: [0, .25, .5, .75, 1], xfmt: t => Math.round(t * 100) + "%",
+      tip: p => `answer top ${Math.round(p[0] * 100)}% → accuracy <b>${pct(p[1])}</b>` });
+  $("cal-note").textContent = vs.map(v => { const r = S(v, calSuite); return `${NAME[v]}: ECE ${fmt(r.ece)}, mean confidence ${fmt(r.mean_confidence, 2)} vs accuracy ${fmt(r.accuracy, 2)}` }).join(" · ") +
+    (V.includes("laya-multi") ? ". laya-multilingual ships without fitted temperatures, so its probabilities are uncalibrated as served." : "");
+}
+
+/* ---------- robustness ---------- */
+function drawRobust() {
+  const suites = ["massive_intent.en", "en.emotion", "xnli.en"];
+  legend("rb-legend", V.map(v => [NAME[v], COL[v]]).concat([["upstream T4 flip rate", "var(--ink)", "tick"]]));
+  const xmax = Math.max(0.25, ...V.flatMap(v => suites.map(s => D.variants[v].order_robustness?.[s]?.flip_rate || 0))) * 1.15;
+  groupedBars($("rb-chart"), suites.map(s => ({ label: prettySuite(s).replace("MASSIVE intent · en", "MASSIVE intent (20 options)").replace("XNLI · en", "XNLI (3 options)").replace("DAIR Emotion", "Emotion (6 options)"),
+    vals: V.map(v => { const r = D.variants[v].order_robustness?.[s] || {}; const u = UP[v] && up.option_order_robustness[UP[v]]?.[s];
+      return { key: NAME[v], color: COL[v], v: r.flip_rate || 0, ref: u ? u.flip_rate : null, fmt: x => pct(x), tip: `n=${r.n}${u ? ` · T4 ${pct(u.flip_rate)}` : ""}` } }) })),
+    { xmax, xfmt: t => Math.round(t * 100) + "%", ref: true });
+}
+
+/* ---------- speed ---------- */
+let srv = "speed";
+function drawSpeed() {
+  const nqs = [1, 2, 5, 10, 20, 50];
+  const ser = V.map(v => ({ name: NAME[v] + " · gfx1151", color: COL[v], pts: nqs.map(n => [n, spd(v).questions_per_request[n].p50_ms]) }));
+  const upser = Object.entries(UP).filter(([v]) => V.includes(v)).map(([v, k]) => ({ name: k + " · T4 PyTorch", color: COL[v], dash: "5 4",
+    pts: [1, 5, 10, 50].map(n => [n, up.latency[k][n + "_questions"].p50_ms]) }));
+  legend("qpr-legend", V.map(v => [NAME[v] + ", gfx1151", COL[v], "line"]).concat([["T4 PyTorch (upstream)", "var(--ink-3)", "dash"]]));
+  lineChart($("qpr-chart"), ser.concat(upser), { logx: true, x0: 1, x1: 50, xticks: nqs, xlabel: "questions in one request", yfmt: t => t + " ms",
+    tip: (p, s) => `${p[0]} question${p[0] > 1 ? "s" : ""}: <b>${fmt(p[1], 1)} ms</b> (${fmt(p[1] / p[0], 1)} ms each)` });
+  lineChart($("len-chart"), V.map(v => ({ name: NAME[v], color: COL[v], pts: spd(v).input_length.map(r => [r.tokens, r.p50_ms]) })),
+    { x0: 0, xlabel: "input tokens", yfmt: t => t + " ms", tip: p => `${p[0]} tokens: <b>${fmt(p[1], 1)} ms</b>` });
+  const groups = V.map(v => ({ label: NAME[v], vals: [
+    { key: "shipped server", color: "var(--ref)", v: spdShip(v).questions_per_request?.["1"]?.p50_ms || 0, fmt: x => fmt(x, 1) + " ms" },
+    { key: "with TCP_NODELAY", color: COL[v], v: spd(v).questions_per_request["1"].p50_ms, fmt: x => fmt(x, 1) + " ms" }] }));
+  groupedBars($("nagle-chart"), groups, { xmax: 60, xfmt: t => t + " ms" });
+  drawConc();
+}
+function drawConc() {
+  const key = srv === "speed" ? spd : spdShip;
+  legend("conc-legend", V.map(v => [NAME[v], COL[v], "line"]));
+  const cl = [1, 2, 4, 8, 16, 32, 64];
+  lineChart($("thr-chart"), V.map(v => ({ name: NAME[v], color: COL[v], pts: (key(v).concurrency || []).map(r => [r.clients, r.questions_s, r]) })),
+    { logx: true, x0: 1, x1: 64, xticks: cl, xlabel: "concurrent clients → questions / s", y1: 520,
+      tip: p => `${p[0]} clients: <b>${p[1]} questions/s</b><br>${p[2].req_s} req/s · p99 ${p[2].p99_ms} ms` });
+  lineChart($("p50-chart"), V.map(v => ({ name: NAME[v], color: COL[v], pts: (key(v).concurrency || []).map(r => [r.clients, r.p50_ms, r]) })),
+    { logx: true, x0: 1, x1: 64, xticks: cl, xlabel: "concurrent clients → p50 latency (ms)", y1: 450, yfmt: t => t,
+      tip: p => `${p[0]} clients: p50 <b>${p[1]} ms</b><br>p95 ${p[2].p95_ms} · p99 ${p[2].p99_ms} ms` });
+}
+
+/* ---------- method ---------- */
+$("method-body").innerHTML = `
+<div><h3>Test sets</h3><ul>
+<li><b>typed-decisions</b> (LocalLLaMA): 400 cases, 2,000 mixed questions, soft teacher labels. Held out for the base checkpoints.</li>
+<li><b>MASSIVE</b> intent and scenario, 14 languages × 300, as 20-option choices (gold + 19 sampled labels).</li>
+<li><b>XNLI</b>, 15 languages × 300, 3-way.</li>
+<li><b>English</b>: SST-5 (5-level score), DAIR Emotion, deepset prompt-injections (116), Banking77 (77 options), AG News and BoolQ (both in Laya's training mix, so they test retention).</li></ul></div>
+<div><h3>Protocol</h3><ul>
+<li>Ported from upstream <code>research/scripts/laya_benchmark_colab.ipynb</code>: same rows, prompts, seed 13 and metric code (15-bin ECE). Our results are compared with <code>t4_colab_benchmark.json</code> (${esc(up.meta.timestamp)}).</li>
+<li>Every case is one <code>POST /v1/decide</code> with all its questions. Probabilities are the served, temperature-scaled ones, which correspond to upstream's "calibrated" column.</li>
+<li>NLL floors probabilities at 5e-5 because the API rounds to 4 decimals. Accuracy, ECE and Brier are unaffected.</li></ul></div>
+<div><h3>Speed setup</h3><ul>
+<li>Server in the stock <code>laya:gfx1151</code> container; client on the same host over keep-alive HTTP/1.1, so numbers include JSON and tokenization.</li>
+<li>"Fixed" runs mount <code>bench/eval/patched/app.py</code> (one added line). Quality numbers come from the fixed server; the fix does not touch inference.</li>
+<li>T4 latencies are upstream's in-process <code>system_one</code> calls with no HTTP, which favours the T4 side.</li></ul></div>
+<div><h3>Reproduce</h3><ul>
+<li><code>bench/eval/.venv/bin/python bench/eval/build_suites.py</code></li>
+<li><code>bench/eval/run_all.sh</code> (all three checkpoints, ~15 min)</li>
+<li><code>bench/eval/.venv/bin/python bench/eval/metrics.py && bench/eval/.venv/bin/python bench/eval/build_report.py</code></li></ul></div>`;
+$("foot").textContent = `layamd · ${V.map(v => NAME[v] + " " + D.variants[v].timestamp).join(" · ")}`;
+
+/* ---------- boot ---------- */
+seg("fam-seg", FAMS, qFam, k => { qFam = k; try { localStorage.setItem("laya.fam", k) } catch (e) {} drawDots() });
+seg("metric-seg", METRICS.map(m => [m[0], m[1]]), qMetric, k => { qMetric = k; try { localStorage.setItem("laya.metric", k) } catch (e) {} drawDots() });
+seg("srv-seg", [["speed", "Fixed server (TCP_NODELAY)"], ["speed_shipped", "Shipped server"]], srv, k => { srv = k; drawConc() });
+legend("q-legend", V.map(v => [NAME[v], COL[v]]).concat([["chance", "var(--ref)", "tick"]]));
+function drawAll() { drawParity(); drawDots(); drawFamilies(); drawTyped(); drawCal(); drawRobust(); drawSpeed() }
+drawAll();
+let rt; addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(drawAll, 150) });
+})();
+</script>

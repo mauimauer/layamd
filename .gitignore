@@ -1,0 +1,15 @@
+# checkpoints (HF layout, multi-GB) and reference tensors: fetched / regenerated, see README
+weights/
+golden*/*/
+# build outputs
+liblaya.so
+*.o
+bench/lt
+bench/pf
+bench/sk
+__pycache__/
+# benchmark harness: venv, downloaded datasets, built suites, raw per-case results (all regenerable)
+bench/eval/.venv/
+bench/eval/data/
+bench/eval/suites/
+bench/eval/results/
