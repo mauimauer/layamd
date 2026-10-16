@@ -1,6 +1,7 @@
 """Laya decision server — drop-in replacement for rl_agent_api.RLAgent.system_one.
 
-Tokenization and sequence construction are a faithful port of the upstream rl_common.py
+Adapted from Laya's ref/rl_common.py and ref/rl_agent_api.py (Apache-2.0, ConvAI Innovations);
+see NOTICE. Tokenization and sequence construction are a faithful port of the upstream rl_common.py
 (the BPE tokenizer is the Rust `tokenizers` lib, ~100us); every tensor op runs in the
 HIP engine on the iGPU via ctypes.
 """

@@ -1,0 +1,41 @@
+layamd
+Copyright 2026 The layamd Authors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+It is an independent project. It is not affiliated with, or endorsed by,
+ConvAI Innovations (the authors of Laya) or Advanced Micro Devices, Inc.
+
+-------------------------------------------------------------------------------
+Third-party material included in this repository
+-------------------------------------------------------------------------------
+
+Laya (https://github.com/NandhaKishorM/laya, https://huggingface.co/convaiinnovations/laya)
+  Apache License 2.0
+  - ref/rl_common.py, ref/rl_agent_api.py: unmodified copies of upstream's model and
+    inference reference (Hugging Face model repo, revision
+    7b928d828b7b0e022f929d9bd2e44165aa270148).
+  - server/laya_server.py: tokenization, sequence construction and answer
+    post-processing are ported from ref/rl_common.py and ref/rl_agent_api.py.
+  - src/ (HIP engine): an independent implementation of the Laya network architecture
+    defined in ref/rl_common.py.
+  - bench/eval/upstream/t4_colab_benchmark.json: upstream's published benchmark results
+    (research/results/, commit 4ac226d5ee88ed6df8db288a05c766d7a34ee682), used for comparison.
+  - bench/eval/build_suites.py and metrics.py reproduce the protocol and metric
+    definitions of upstream's research/scripts/laya_benchmark_colab.ipynb.
+  - finetune/: the training script is downloaded from upstream at a pinned commit and is
+    not redistributed here.
+
+JSON for Modern C++ (https://github.com/nlohmann/json)
+  Copyright 2013-2023 Niels Lohmann. MIT License.
+  - src/third_party/json.hpp (license text in the file header).
+
+-------------------------------------------------------------------------------
+Not included (downloaded by the user at run time)
+-------------------------------------------------------------------------------
+
+- Laya checkpoints (Apache-2.0), with ModernBERT-large (Apache-2.0) and mmBERT-base (MIT)
+  encoders: scripts/fetch_weights.sh.
+- Benchmark datasets, each under its own license (see bench/eval/README.md):
+  bench/eval/build_suites.py.
+- ROCm, hipBLAS and hipBLASLt (MIT), installed into the container image from AMD's
+  package repository.
