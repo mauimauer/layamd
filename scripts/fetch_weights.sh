@@ -24,6 +24,6 @@ for v in ${@:-laya-en laya-multi laya-typed}; do
       [[ -n "$remote" && "$(stat -c %s "$out")" == "$remote" ]] && { echo "   ok   $f"; continue; }
     fi
     echo "   get  $f"
-    curl -fL --retry 5 --retry-delay 5 -o "$out.part" "$url" && mv "$out.part" "$out"
+    curl -fsSL --retry 5 --retry-delay 5 -o "$out.part" "$url" && mv "$out.part" "$out"
   done
 done

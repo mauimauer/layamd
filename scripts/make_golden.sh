@@ -6,4 +6,4 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd); cd "$ROOT"
 v=${1:?variant, e.g. laya-en}; out=${2:-golden-$v}
 docker image inspect laya-ref:cpu >/dev/null 2>&1 || docker build -f docker/Dockerfile.reference -t laya-ref:cpu .
 mkdir -p "$out"
-docker run --rm -v "$ROOT/weights:/weights:ro" -v "$(realpath "$out"):/golden" -e LAYA_MODEL_DIR="/weights/$v" laya-ref:cpu
+docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$ROOT/weights:/weights:ro" -v "$(realpath "$out"):/golden" -e LAYA_MODEL_DIR="/weights/$v" laya-ref:cpu
