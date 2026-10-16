@@ -113,11 +113,16 @@ struct Engine {
 };
 
 __half* Engine::up(const Tensor& t){
-  size_t cnt = t.dtype=="F16" ? t.nbytes/2 : t.nbytes/4;
+  size_t cnt = t.dtype=="F32" ? t.nbytes/4 : t.nbytes/2;     // F16 / BF16: 2 bytes
   __half* d; HC(hipMalloc(&d,cnt*2));
   if(t.dtype=="F16") HC(hipMemcpy(d,t.data,cnt*2,hipMemcpyHostToDevice));
-  else if(t.dtype=="F32"){ std::vector<__half> tmp(cnt); const float* s=(const float*)t.data;
-    for(size_t i=0;i<cnt;i++) tmp[i]=__float2half(s[i]);
+  else if(t.dtype=="F32" || t.dtype=="BF16"){        // fine-tunes are often saved in bf16
+    std::vector<__half> tmp(cnt); float amax=0.f;
+    for(size_t i=0;i<cnt;i++){
+      float f; if(t.dtype=="F32") f=((const float*)t.data)[i];
+      else { uint32_t u=(uint32_t)((const uint16_t*)t.data)[i]<<16; memcpy(&f,&u,4); }
+      amax=fmaxf(amax,fabsf(f)); tmp[i]=__float2half(f); }
+    if(amax>65504.f){ fprintf(stderr,"tensor exceeds fp16 range (|x| max %g)\n",amax); exit(1); }
     HC(hipMemcpy(d,tmp.data(),cnt*2,hipMemcpyHostToDevice)); }
   else { fprintf(stderr,"dtype %s unsupported\n",t.dtype.c_str()); exit(1); }
   return d;
