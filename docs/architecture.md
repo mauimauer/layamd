@@ -103,9 +103,11 @@ rows (8192), so the request path never allocates.
   can attend across a sequence boundary.
 - Packs are cut into **passes of about 1024 rows** (`LAYA_PASS_TOKENS`). That size keeps the
   working set inside the 32 MB last-level cache.
-- **Gathered rows.** After the last head layer's attention, the only rows still read are
-  every question's option markers (packed back to back, padded to 64) plus one CLS row per
-  question. The out-projection, FFN, scorer and act head run on those `KT + B` rows only.
+- **Gathered rows.** In the last head layer, the only rows read after attention are every
+  question's option markers (packed back to back, padded to 64) plus one CLS row per question.
+  `k_flash_wmma_gather` computes attention queries only for those `KT + B` gathered rows
+  (attending over each question's full K/V), and the out-projection, FFN, scorer and act head
+  run on those `KT + B` rows only.
 
 Inputs for a pass are staged in pinned host buffers at fixed addresses, then copied to fixed
 device buffers. Because the addresses never change, each pass shape (rows, sequences, marker
@@ -120,7 +122,7 @@ embeddings → LN ─┐
                  │                      → MLP-in GEMM → GeGLU → MLP-out GEMM + residual + LN (fused)
 final LN + type embedding (fused into the last residual)
 head layer 1:    LN → QKV GEMM → attention → out-proj + residual + LN → FFN → residual + LN
-head layer 2:    LN → QKV GEMM → attention → gather(marker + CLS rows)
+head layer 2:    LN → QKV GEMM → gathered attention(marker + CLS queries) + gather(x)
                  → out-proj + residual + LN → FFN → residual        (gathered rows only)
 scorer (marker rows) → option logits          act head (CLS rows) → act logits
 ```
@@ -133,7 +135,7 @@ outputs are fp16, added into the fp32 stream by the fused residual+LayerNorm ker
 Each GEMM goes through a **plan** chosen by timing. The candidates are hipBLAS with split-K
 1/2/4/8 (fp16 partials, reduced in fp32), the top hipBLASLt heuristic algorithms, and
 optionally the custom WMMA GEMM in `wgemm.hip` (`LAYA_WGEMM=1`). Plans are tuned per (M
-bucket, N, K) at startup, which takes about 4 s. Dynamic batch sizes therefore never trigger
+bucket, N, K) up to `LAYA_PASS_TOKENS` at startup, which takes about 1.6 s (0.7 s on `laya-multi`). Dynamic batch sizes therefore never trigger
 tuning on the request path.
 
 ### Kernels (`kernels.hip`)

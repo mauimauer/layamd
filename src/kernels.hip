@@ -35,7 +35,8 @@ __device__ __forceinline__ void st2(__half* p,int i,float2 v){ ((__half2*)p)[i]=
 template<typename Tin,typename Tout>
 __global__ __launch_bounds__(128) void k_ln(const Tin* __restrict__ x, const int* __restrict__ ids,
     const __half* __restrict__ w, const __half* __restrict__ b, Tout* y, int D, float eps,
-    const __half* __restrict__ addtab, const int* __restrict__ addidx, const int* __restrict__ rowseq){
+    const __half* __restrict__ addtab, const int* __restrict__ addidx, const int* __restrict__ rowseq,
+    __half* __restrict__ y2=nullptr){
   __shared__ float sh[4];
   const int row=blockIdx.x, n2=D/2;
   const size_t src = ids ? (size_t)ids[row] : (size_t)row;
@@ -50,6 +51,7 @@ __global__ __launch_bounds__(128) void k_ln(const Tin* __restrict__ x, const int
   const float inv=rsqrtf(block_red<false>(q,sh)/D+eps);
   const __half* a2 = addtab ? addtab+(size_t)addidx[rowseq[row]]*D : nullptr;
   Tout* yr=y+(size_t)row*D;
+  __half* yr2=y2 ? y2+(size_t)row*D : nullptr;
   #pragma unroll
   for(int k=0;k<4;k++){ int i=threadIdx.x+k*128; if(i<n2){
     float2 ww=ld2(w,i);
@@ -57,11 +59,12 @@ __global__ __launch_bounds__(128) void k_ln(const Tin* __restrict__ x, const int
     if(b){ float2 bb=ld2(b,i); o.x+=bb.x; o.y+=bb.y; }
     if(a2){ float2 aa=ld2(a2,i); o.x+=aa.x; o.y+=aa.y; }
     st2(yr,i,o);
+    if(yr2) st2(yr2,i,o);
   } }
 }
 
 // ---- RoPE (HF rotate_half) applied in place to the q and k thirds of qkv[rows][3D]. ----
-// One block per row, one thread per (head, pair). V is untouched; attention reads Q/K/V
+// One block per row, one thread per (head, half2 pair). V is untouched; attention reads Q/K/V
 // straight out of qkv, so there are no split/transpose copies.
 __global__ void k_rope_inplace(__half* __restrict__ qkv, const float* __restrict__ cosv,
                                const float* __restrict__ sinv, const int* __restrict__ pos_of, int H, int HD){
@@ -148,10 +151,10 @@ typedef _Float16 h16 __attribute__((ext_vector_type(16)));
 typedef _Float16 h8v __attribute__((ext_vector_type(8)));
 typedef float f8 __attribute__((ext_vector_type(8)));
 
-template<int HD>
-__global__ __launch_bounds__(128) void k_flash_wmma(const __half* __restrict__ qkv, __half* __restrict__ out,
+template<int HD,bool GATHER>
+__device__ __forceinline__ void flash_wmma_impl(const __half* __restrict__ qkv, __half* __restrict__ out,
     int ntiles, int H, int window, const int* __restrict__ vlen, const int* __restrict__ soff,
-    const int* __restrict__ tseq, const int* __restrict__ tq0, float scale){
+    const int* __restrict__ tseq, const int* __restrict__ tq0, float scale, const int* __restrict__ grow){
   constexpr int NC=HD/16;
   __shared__ _Float16 Vs[4][16][HD];
   __shared__ _Float16 Ps[4][16][16];
@@ -160,13 +163,20 @@ __global__ __launch_bounds__(128) void k_flash_wmma(const __half* __restrict__ q
   if(ti>=ntiles) return;                 // no block-wide barriers below: LDS slices are per wave
   const int b=tseq[ti];
   if(b<0) return;                        // padding tile at the end of the pack
-  const int q0=tq0[ti], valid=vlen[b];
+  const int q0 = GATHER ? 0 : tq0[ti], valid=vlen[b];
   const _Float16* base=(const _Float16*)qkv+(size_t)soff[b]*3*D;
   h16 qa[NC];
-  #pragma unroll
-  for(int c=0;c<NC;c++) qa[c]=*(const h16*)(base+(size_t)(q0+r16)*3*D+h*HD+c*16);
+  if(GATHER){
+    const int gq=tq0[ti*16+r16];
+    const _Float16* qrow=(const _Float16*)qkv+(size_t)(gq>=0?grow[gq]:soff[b])*3*D+h*HD;
+    #pragma unroll
+    for(int c=0;c<NC;c++) qa[c]=*(const h16*)(qrow+c*16);
+  } else {
+    #pragma unroll
+    for(int c=0;c<NC;c++) qa[c]=*(const h16*)(base+(size_t)(q0+r16)*3*D+h*HD+c*16);
+  }
   int lo=0, hi=valid;
-  if(window>0){ int hf=window/2; lo=max(0,q0-hf); hi=min(valid,q0+15+hf+1); }
+  if(!GATHER && window>0){ int hf=window/2; lo=max(0,q0-hf); hi=min(valid,q0+15+hf+1); }
   lo&=~15;
   f8 o[NC];
   #pragma unroll
@@ -191,7 +201,7 @@ __global__ __launch_bounds__(128) void k_flash_wmma(const __half* __restrict__ q
     #pragma unroll
     for(int i=0;i<8;i++){
       const int q=q0+2*i+hl;
-      const bool ok = j<valid && (window==0 || abs(q-j)<=window/2);
+      const bool ok = j<valid && (GATHER || window==0 || abs(q-j)<=window/2);
       const float v = ok ? s[i]*scale : -INFINITY;
       float mx=v;
       #pragma unroll
@@ -222,8 +232,10 @@ __global__ __launch_bounds__(128) void k_flash_wmma(const __half* __restrict__ q
   #pragma unroll
   for(int i=0;i<8;i++){
     const int q=q0+2*i+hl;
+    const int gq = GATHER ? tq0[ti*16+2*i+hl] : 0;
+    if(GATHER && gq<0) continue;
     const float inv = l[i]>0.f ? 1.f/l[i] : 0.f;
-    __half* dst=out+((size_t)soff[b]+q)*D+h*HD;
+    __half* dst=out+(GATHER ? (size_t)gq : (size_t)soff[b]+q)*D+h*HD;
     #pragma unroll
     for(int c=0;c<NC;c++) dst[c*16+r16]=__float2half(o[c][i]*inv);
   }
@@ -240,13 +252,15 @@ __global__ void k_geglu(const __half* __restrict__ in, __half* __restrict__ out,
   }
 }
 
-// act: 0 = bias, 1 = bias+ReLU, 2 = bias+GELU
+// act: 0 = bias, 1 = bias+ReLU, 2 = bias+GELU (half2-vectorized; N is even)
 __global__ void k_bias_act(__half* __restrict__ x, const __half* __restrict__ b, int rows, int N, int act){
-  const size_t n=(size_t)rows*N;
+  const int N2=N/2; const size_t n=(size_t)rows*N2;
   for(size_t i=blockIdx.x*(size_t)blockDim.x+threadIdx.x;i<n;i+=(size_t)gridDim.x*blockDim.x){
-    float v=__half2float(x[i])+__half2float(b[i%N]);
-    if(act==1) v=fmaxf(v,0.f); else if(act==2) v=gelu_erf(v);
-    x[i]=__float2half(v);
+    float2 v=__half22float2(((const __half2*)x)[i]), bb=__half22float2(((const __half2*)b)[i%N2]);
+    v.x+=bb.x; v.y+=bb.y;
+    if(act==1){ v.x=fmaxf(v.x,0.f); v.y=fmaxf(v.y,0.f); }
+    else if(act==2){ v.x=gelu_erf(v.x); v.y=gelu_erf(v.y); }
+    ((__half2*)x)[i]=__float22half2_rn(v);
   }
 }
 
@@ -308,11 +322,11 @@ static inline int gs(size_t n){ size_t g=(n+255)/256; return (int)(g>1024?1024:(
 
 template<typename Ti,typename To>
 static void ln_(const Ti* x,const int* ids,const __half* w,const __half* b,To* y,int rows,int D,float eps,
-                const __half* addtab,const int* addidx,const int* S,hipStream_t st){
+                const __half* addtab,const int* addidx,const int* S,hipStream_t st,__half* y2=nullptr){
   if(D%256||D>1024){ fprintf(stderr,"[laya] LayerNorm needs D%%256==0 && D<=1024 (D=%d)\n",D); abort(); }
-  hipLaunchKernelGGL((k_ln<Ti,To>),dim3(rows),dim3(128),0,st,x,ids,w,b,y,D,eps,addtab,addidx,S); }
+  hipLaunchKernelGGL((k_ln<Ti,To>),dim3(rows),dim3(128),0,st,x,ids,w,b,y,D,eps,addtab,addidx,S,y2); }
 void launch_ln(const __half* x,const int* ids,const __half* w,const __half* b,__half* y,int rows,int D,float eps,const __half* at,const int* ai,const int* S,hipStream_t st){ ln_(x,ids,w,b,y,rows,D,eps,at,ai,S,st); }
-void launch_ln(const __half* x,const int* ids,const __half* w,const __half* b,float* y,int rows,int D,float eps,const __half* at,const int* ai,const int* S,hipStream_t st){ ln_(x,ids,w,b,y,rows,D,eps,at,ai,S,st); }
+void launch_ln(const __half* x,const int* ids,const __half* w,const __half* b,float* y,int rows,int D,float eps,const __half* at,const int* ai,const int* S,hipStream_t st,__half* y2){ ln_(x,ids,w,b,y,rows,D,eps,at,ai,S,st,y2); }
 void launch_ln(const float* x,const int* ids,const __half* w,const __half* b,__half* y,int rows,int D,float eps,const __half* at,const int* ai,const int* S,hipStream_t st){ ln_(x,ids,w,b,y,rows,D,eps,at,ai,S,st); }
 void launch_ln(const float* x,const int* ids,const __half* w,const __half* b,float* y,int rows,int D,float eps,const __half* at,const int* ai,const int* S,hipStream_t st){ ln_(x,ids,w,b,y,rows,D,eps,at,ai,S,st); }
 void launch_rope_inplace(__half* qkv,const float* c,const float* s,const int* pos,int rows,int H,int HD,hipStream_t st){
@@ -324,7 +338,7 @@ void launch_splitk_reduce(float* dst,const __half* part,int splits,size_t n,int 
 void launch_geglu(const __half* in,__half* out,int rows,int I,hipStream_t st){
   hipLaunchKernelGGL(k_geglu,dim3(gs((size_t)rows*I/2)),dim3(256),0,st,in,out,rows,I); }
 void launch_bias_act(__half* x,const __half* b,int rows,int N,int act,hipStream_t st){
-  hipLaunchKernelGGL(k_bias_act,dim3(gs((size_t)rows*N)),dim3(256),0,st,x,b,rows,N,act); }
+  hipLaunchKernelGGL(k_bias_act,dim3(gs((size_t)rows*N/2)),dim3(256),0,st,x,b,rows,N,act); }
 void launch_gather(const float* h,const int* rows,float* m,int K,int D,hipStream_t st){
   hipLaunchKernelGGL((k_gather<float>),dim3(K),dim3(256),0,st,h,rows,m,D); }
 void launch_gather(const __half* h,const int* rows,__half* m,int K,int D,hipStream_t st){
@@ -334,9 +348,30 @@ void launch_bias_to_float(const __half* x,const __half* b,float* y,int n,hipStre
 void launch_act_head(const float* cls,int D,const float* logits,const int* moff,const int* nmark,
                      const __half* W0,const __half* B0,const __half* W2,const __half* B2,int n_act,float* out,int B,hipStream_t st){
   hipLaunchKernelGGL(k_act_head,dim3(B),dim3(256),(D+4+256)*sizeof(float),st,cls,D,logits,moff,nmark,W0,B0,W2,B2,n_act,out); }
+template<int HD>
+__global__ __launch_bounds__(128) void k_flash_wmma(const __half* __restrict__ qkv, __half* __restrict__ out,
+    int ntiles, int H, int window, const int* __restrict__ vlen, const int* __restrict__ soff,
+    const int* __restrict__ tseq, const int* __restrict__ tq0, float scale){
+  flash_wmma_impl<HD,false>(qkv,out,ntiles,H,window,vlen,soff,tseq,tq0,scale,nullptr);
+}
+template<int HD>
+__global__ __launch_bounds__(128) void k_flash_wmma_gather(const __half* __restrict__ qkv, __half* __restrict__ out,
+    int ntiles, int H, const int* __restrict__ vlen, const int* __restrict__ soff,
+    const int* __restrict__ tseq, const int* __restrict__ tq0, float scale, const int* __restrict__ grow){
+  flash_wmma_impl<HD,true>(qkv,out,ntiles,H,0,vlen,soff,tseq,tq0,scale,grow);
+}
 void launch_flash_wmma(const __half* qkv,__half* out,int ntiles,int H,int HD,int window,const int* vlen,
-                       const int* soff,const int* tseq,const int* tq0,float scale,hipStream_t st){
+                       const int* soff,const int* tseq,const int* tq0,float scale,hipStream_t st,const int* grow){
   dim3 g((ntiles+3)/4,H), blk(128);
+  if(grow){
+    switch(HD){
+      case 64:  hipLaunchKernelGGL((k_flash_wmma_gather<64>), g,blk,0,st,qkv,out,ntiles,H,vlen,soff,tseq,tq0,scale,grow); break;
+      case 128: hipLaunchKernelGGL((k_flash_wmma_gather<128>),g,blk,0,st,qkv,out,ntiles,H,vlen,soff,tseq,tq0,scale,grow); break;
+      case 32:  hipLaunchKernelGGL((k_flash_wmma_gather<32>), g,blk,0,st,qkv,out,ntiles,H,vlen,soff,tseq,tq0,scale,grow); break;
+      default: fprintf(stderr,"[laya] flash: unsupported head_dim %d\n",HD); abort();
+    }
+    return;
+  }
   switch(HD){
     case 64:  hipLaunchKernelGGL((k_flash_wmma<64>), g,blk,0,st,qkv,out,ntiles,H,window,vlen,soff,tseq,tq0,scale); break;
     case 128: hipLaunchKernelGGL((k_flash_wmma<128>),g,blk,0,st,qkv,out,ntiles,H,window,vlen,soff,tseq,tq0,scale); break;

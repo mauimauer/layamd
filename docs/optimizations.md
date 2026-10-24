@@ -40,31 +40,39 @@ is more accurate than upstream's own GPU path, which uses bf16 autocast
 - **About 1024-row passes.** Packs larger than this spill the 32 MB last-level cache: GeGLU,
   LayerNorm and attention K/V reads go to DRAM. Splitting 32 × 256 tokens into 1024-row passes
   took it from 9.2 to 6.5 ms per question.
-- **Decision-head pruning with packed markers.** After the last head layer's attention, only
-  option-marker rows and CLS rows are read. The out-projection, FFN and scorer run on just
-  those rows. Markers are packed per pass (padded to 64), so a 3-option question costs 4 rows,
-  not a fixed 65. Before this change the engine reserved 64 slots per question and rejected
-  questions with more options. Packing removed that limit (now 255) and raised batched
+- **Decision-head pruning with packed markers and gathered attention.** In the last head layer,
+  only option-marker rows and CLS rows are read after attention. `k_flash_wmma_gather` computes
+  attention queries only for those gathered rows (attending over each sequence's full K/V) and
+  writes directly into the gathered buffer, skipping non-marker/CLS queries and the post-attention
+  gather pass (~10% faster head stage at 1024 tokens). The out-projection, FFN and scorer then
+  run on just those rows. Markers are packed per pass (padded to 64), so a 3-option question
+  costs 4 rows, not a fixed 65. Before this change the engine reserved 64 slots per question and
+  rejected questions with more options. Packing removed that limit (now 255) and raised batched
   throughput by 1–4%.
 
 ## Kernels
 
-- **Fused flash attention on WMMA** (`k_flash_wmma`). One wave handles 16 queries. QKᵀ and PV
-  are 16×16×16 WMMA instructions with fp32 accumulation, the softmax runs online in fp32
-  registers, and Q/K/V are read straight from the fused QKV buffer. The S×S score matrix never
-  touches memory, and sliding-window layers only visit key blocks inside their band. Compared
-  with GEMM-based attention, 1024 tokens went from 44 to 29 ms.
-- **Fused residual + LayerNorm** (`k_res_ln`). Each residual update (fp16 GEMM output, plus
-  bias and split-K partials, added into fp32) is one row-wise kernel together with the
-  LayerNorm that follows it. The final norm also adds the type embedding there. Saves about 2%.
+- **Fused flash attention on WMMA** (`k_flash_wmma`, `k_flash_wmma_gather`). One wave handles
+  16 queries. QKᵀ and PV are 16×16×16 WMMA instructions with fp32 accumulation, the softmax runs
+  online in fp32 registers, and Q/K/V are read straight from the fused QKV buffer. The S×S score
+  matrix never touches memory, and sliding-window layers only visit key blocks inside their band.
+  Compared with GEMM-based attention, 1024 tokens went from 44 to 29 ms. The encoder uses a
+  10-argument specialization without gather parameters to avoid extra SGPR pressure.
+- **Fused residual + LayerNorm** (`k_res_ln`) and **dual-output embedding LayerNorm** (`k_ln`).
+  Each residual update (fp16 GEMM output, plus bias and split-K partials, added into fp32) is
+  one row-wise kernel together with the LayerNorm that follows it. The final norm also adds the
+  type embedding there. At layer 0 (which has no `attn_norm`), `k_ln` writes both the fp32
+  residual stream and the fp16 GEMM input in one launch, cutting `enc:layernorm` by ~25%.
 - **RoPE in place** on the QKV buffer, so there are no split or transpose copies.
+- **`half2`-vectorized bias + activation** (`k_bias_act`) for head QKV bias, head FFN ReLU, and
+  scorer GELU, halving thread count and memory transactions.
 
 ## GEMMs
 
 - **Autotuned plans.** No single library wins every shape on gfx1151. For each (M bucket, N,
-  K) the engine times hipBLAS with split-K 1/2/4/8 and hipBLASLt's top heuristic algorithms,
-  and keeps the fastest. All buckets are tuned at startup (about 4 s), never on the request
-  path.
+  K) up to `LAYA_PASS_TOKENS` the engine times hipBLAS with split-K 1/2/4/8 and hipBLASLt's top
+  heuristic algorithms, and keeps the fastest. All reachable buckets are tuned at startup (~1.6 s
+  on `laya-en`/`laya-typed`, ~0.7 s on `laya-multi`), never on the request path.
 - **Cold-weight timing for small M.** With M ≤ 128 the real pass streams 28 layers of distinct
   weights from DRAM. Timing candidates on one cache-hot matrix picked plans about 3% slower in
   the model, so small-M candidates are timed streaming through every layer's weights.
@@ -81,12 +89,17 @@ jitter out of the latency.
 
 ## Server
 
-**One write per response, with `TCP_NODELAY`.** Python's `BaseHTTPRequestHandler` writes
-headers and body separately with Nagle's algorithm on. On a keep-alive connection the body
-then waits for the client's delayed ACK, about 40 ms. Every HTTP client that pools connections
-hit this on every request: one decision took 48–51 ms instead of 6–10 ms. Benchmarks that
-opened a new connection per request never saw it, because TCP acknowledges immediately at the
-start of a connection.
+- **One write per response, with `TCP_NODELAY`.** Python's `BaseHTTPRequestHandler` writes
+  headers and body separately with Nagle's algorithm on. On a keep-alive connection the body
+  then waits for the client's delayed ACK, about 40 ms. Every HTTP client that pools connections
+  hit this on every request: one decision took 48–51 ms instead of 6–10 ms. Benchmarks that
+  opened a new connection per request never saw it, because TCP acknowledges immediately at the
+  start of a connection.
+- **Shared state tokenization, option LRU cache, and `array('i')` C marshaling.** A multi-question
+  request shares one `state` payload across all its questions; `Laya.prepare` serializes and
+  tokenizes `state` once per request, caches tokenized option strings (`lru_cache`), and marshals
+  flat integer arrays via `array('i')` buffer sharing instead of Python tuple unpacking (~7×
+  faster tokenization on multi-question requests, ~2.3× faster ctypes marshaling).
 
 ## Tried and not adopted
 
@@ -96,6 +109,8 @@ start of a connection.
 | **Custom WMMA GEMM** (`wgemm.hip`, opt-in `LAYA_WGEMM=1`): 8/4-wave tiles, split-K, double-buffered LDS | Correct. Peaks at 25–36 TFLOPS vs ~42 for hipBLASLt on the wide projections. Wins only on small-M N=1024 shapes (64×1024×2624: 17 vs 26 µs in isolation), which nets to about zero in the model. |
 | **GeGLU fused into the MLP-in GEMM epilogue** (the [M, 2I] intermediate never reaches memory) | Correct, but slower than hipBLASLt plus a separate GeGLU kernel at every M: 1024 rows 400 vs ~305 µs, 64 rows 55 vs ~40 µs. |
 | **Raising the fixed option slots from 64 to 256** | Rejected without building it. Every question would pay for 257 gathered rows; packing does the same job at the actual option count. |
+| **First-Fit Decreasing (FFD) bin-packing across passes** | Sorts short sequences into the final pass (`B = 14–18`), pushing `KT` from 64 to 128 and increasing HIP graph cache misses under mixed-length load. Greedy in-order packing is faster. |
+| **Rayon `encode_batch` in `Laya.prepare`** | Slightly faster for 1 client (`0.24 -> 0.18 ms` on 20 questions), but under concurrent HTTP load (`c = 4–64`) Rayon wakes all 32 CPU threads across both CCDs, contending with the batcher thread and stealing shared APU package power from the iGPU (~10% lower concurrent `req/s`). |
 
 ## Knobs (environment)
 

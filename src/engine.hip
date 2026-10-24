@@ -99,15 +99,15 @@ struct Engine {
   void gemm_raw(const __half* A,const __half* W,__half* C,int m,int n,int k,bool accumulate,const __half* bias,const Plan& p);
   float *d_logits,*d_act;
   // per-pass inputs: device + pinned host mirrors (fixed addresses so graphs can replay them)
-  int *d_ids,*d_pos,*d_seq,*d_soff,*d_vlen,*d_qt,*d_tseq,*d_tq0,*d_grow,*d_nm,*d_moff;
-  int *h_ids,*h_pos,*h_seq,*h_soff,*h_vlen,*h_qt,*h_tseq,*h_tq0,*h_grow,*h_nm,*h_moff; float *h_logits,*h_act;
-  std::map<std::tuple<int,int,int>,hipGraphExec_t> graphs;
+  int *d_ids,*d_pos,*d_seq,*d_soff,*d_vlen,*d_qt,*d_tseq,*d_tq0,*d_grow,*d_nm,*d_moff,*d_gtseq,*d_gdst;
+  int *h_ids,*h_pos,*h_seq,*h_soff,*h_vlen,*h_qt,*h_tseq,*h_tq0,*h_grow,*h_nm,*h_moff,*h_gtseq,*h_gdst; float *h_logits,*h_act;
+  std::map<std::tuple<int,int,int,int>,hipGraphExec_t> graphs;
 
   void load(const std::string& dir);
   __half* up(const Tensor& t);
   __half* upT(const Tensor& t,bool keep_orig=false);   // [out,in] -> [in,out] for NN GEMM (optionally keep the original)
-  void run(int T,int B,int KT);
-  void execute(int T,int B,int KT);
+  void run(int T,int B,int KT,int NTg);
+  void execute(int T,int B,int KT,int NTg);
   int forward_batch(int B,const int* lens,const int* ids,const int* nmark,const int* markers,
                     const int* qtypes,float* logits,float* act);
 };
@@ -201,7 +201,7 @@ void Engine::load(const std::string& dir){
 
 
   const int D=cfg.d,I=cfg.intermediate,FF=cfg.head_ffn, MT=MAXTOK;
-  const int maxB=MAXB, RG=MT+MAXB;              // gathered rows: <= MT marker rows + one CLS row per sequence
+  const int maxB=MAXB, RG=MT+MAXB, maxNTg=MT/16+MAXB; // gathered rows: <= MT marker rows + one CLS row per sequence
   auto A=[&](size_t n){ __half* p; HC(hipMalloc(&p,n*2)); HC(hipMemset(p,0,n*2)); return p; };
   HC(hipMalloc(&x,(size_t)MT*D*4)); xn=A((size_t)MT*D); ao=A((size_t)MT*D); rtmp=A((size_t)MT*D);
   qkv_base=A((size_t)(PAD+MT+PAD)*3*D); qkv=qkv_base+(size_t)PAD*3*D;
@@ -228,7 +228,9 @@ void Engine::load(const std::string& dir){
   struct IA{ int** d; int** h; size_t n; } ia[]={
     {&d_ids,&h_ids,(size_t)MT},{&d_pos,&h_pos,(size_t)MT},{&d_seq,&h_seq,(size_t)MT},
     {&d_soff,&h_soff,(size_t)maxB+1},{&d_vlen,&h_vlen,(size_t)maxB+1},{&d_qt,&h_qt,(size_t)maxB+1},
-    {&d_tseq,&h_tseq,(size_t)MT/16},{&d_tq0,&h_tq0,(size_t)MT/16},{&d_grow,&h_grow,(size_t)RG},{&d_nm,&h_nm,(size_t)maxB},{&d_moff,&h_moff,(size_t)maxB+1}};
+    {&d_tseq,&h_tseq,(size_t)MT/16},{&d_tq0,&h_tq0,(size_t)MT/16},{&d_grow,&h_grow,(size_t)RG},
+    {&d_nm,&h_nm,(size_t)maxB},{&d_moff,&h_moff,(size_t)maxB+1},
+    {&d_gtseq,&h_gtseq,(size_t)maxNTg},{&d_gdst,&h_gdst,(size_t)maxNTg*16}};
   for(auto& a:ia){ HC(hipMalloc(a.d,a.n*4)); HC(hipHostMalloc(a.h,a.n*4)); }
   printf("[laya] ready: max_tokens/pass=%d graphs=%d\n",MAXTOK,(int)use_graphs);
 }
@@ -370,9 +372,9 @@ void Engine::tune_all(){
   struct Sh{ const __half* W; int n,k; };
   std::vector<Sh> sh={{enc[0].Wqkv,3*D,D},{enc[0].Wo,D,D},{enc[0].Wi,2*I,D},{enc[0].Wmo,D,I},
                       {head[0].l1W,FF,D},{head[0].l2W,D,FF},{sc_3w,1,D}};
-  // every M bucket: covers the encoder and, since marker rows are packed (any count up to the
-  // pass size), the gathered head rows and the scorer too -- they share these (n,k) shapes
-  for(int mb=64; mb<=mbucket(MAXTOK); mb=mbucket(mb+1))
+  // every M bucket up to pass_tokens: covers the encoder and, since marker+CLS rows are packed
+  // (<= pass_tokens), the gathered head rows and the scorer too -- they share these (n,k) shapes
+  for(int mb=64; mb<=mbucket(pass_tokens); mb=mbucket(mb+1))
     for(auto& s:sh) tune_bucket(s.W,mb,s.n,s.k);
 }
 
@@ -390,22 +392,22 @@ void Engine::gemm_res(const __half* A,const __half* W,float* X,int m,int n,int k
 
 
 // Enqueue one full forward for the pack currently staged in the pinned host buffers:
-// T rows (multiple of 64), B sequences, KT packed marker rows (multiple of 64).
-void Engine::run(int T,int B,int KT){
-  const int D=cfg.d,H=cfg.n_heads,HD=cfg.head_dim,I=cfg.intermediate,FF=cfg.head_ffn, M=T, NT=T/16;
-  const int R=KT+B;
+// T rows (multiple of 64), B sequences, KT packed marker+CLS rows (multiple of 64).
+void Engine::run(int T,int B,int KT,int NTg){
+  const int D=cfg.d,H=cfg.n_heads,HD=cfg.head_dim,I=cfg.intermediate,FF=cfg.head_ffn, M=T, NT=T/16, R=KT+B;
   const float eps=cfg.norm_eps, scale=1.f/sqrtf((float)HD);
   auto linear=[&](const __half* A_,const __half* W,__half* C,int m,int n,int k){ gemm(A_,W,C,m,n,k,false,nullptr); };
   auto attend=[&](int window){ launch_flash_wmma(qkv,ao,NT,H,HD,window,d_vlen,d_soff,d_tseq,d_tq0,scale,stream); };
-
   auto h2d=[&](int* d,const int* h,size_t n){ HC(hipMemcpyAsync(d,h,n*4,hipMemcpyHostToDevice,stream)); };
-  h2d(d_ids,h_ids,M); h2d(d_pos,h_pos,M); h2d(d_seq,h_seq,M);
+
+  h2d(d_ids,h_ids,T); h2d(d_pos,h_pos,T); h2d(d_seq,h_seq,T);
   h2d(d_soff,h_soff,B+1); h2d(d_vlen,h_vlen,B+1); h2d(d_qt,h_qt,B+1);
-  h2d(d_tseq,h_tseq,NT); h2d(d_tq0,h_tq0,NT); h2d(d_grow,h_grow,R); h2d(d_nm,h_nm,B); h2d(d_moff,h_moff,B);
+  h2d(d_tseq,h_tseq,NT); h2d(d_tq0,h_tq0,NT); h2d(d_grow,h_grow,R);
+  h2d(d_nm,h_nm,B); h2d(d_moff,h_moff,B);
+  h2d(d_gtseq,h_gtseq,NTg); h2d(d_gdst,h_gdst,(size_t)NTg*16);
 
   // embeddings -> fp32 residual x, plus the same values in fp16 for layer 0 (no attn_norm there)
-  P("enc:layernorm", launch_ln(tok_emb,d_ids,emb_norm,nullptr,x,M,D,eps,nullptr,nullptr,nullptr,stream);
-                     launch_ln(tok_emb,d_ids,emb_norm,nullptr,xn,M,D,eps,nullptr,nullptr,nullptr,stream));
+  P("enc:layernorm", launch_ln(tok_emb,d_ids,emb_norm,nullptr,x,M,D,eps,nullptr,nullptr,nullptr,stream,enc[0].attn_norm?nullptr:xn));
   // Each residual update is fused with the LayerNorm that follows it (next layer's attn_norm, or
   // the final norm + per-sequence type embedding written back into x).
   for(int L=0;L<cfg.n_layers;L++){
@@ -434,7 +436,7 @@ void Engine::run(int T,int B,int KT){
     if(L==0) P("head", launch_ln(x,nullptr,hl.n1w,hl.n1b,xn,M,D,eps,nullptr,nullptr,nullptr,stream));
     P("head", linear(xn,hl.inW,qkv,M,3*D,D);
               launch_bias_act(qkv,hl.inB,M,3*D,0,stream);
-              attend(0));
+              if(!last) attend(0));
     if(!last){
       const HeadLayer& nx=head[L+1];                        // not last, so a next layer exists
       P("head", gemm_res_ln(ao,hl.outW,x,M,D,D,hl.outB,hl.n2w,hl.n2b,xn);
@@ -443,9 +445,9 @@ void Engine::run(int T,int B,int KT){
                 gemm_res_ln(ff,hl.l2W,x,M,D,FF,hl.l2B,nx.n1w,nx.n1b,xn));
     } else {
       // only marker rows (scorer) and CLS rows (act head) are read after this layer:
-      // gather them (R = KT+B rows: KT packed marker rows, then B CLS rows) and finish there
-      P("head", launch_gather(x,d_grow,xg,R,D,stream);
-                launch_gather(ao,d_grow,aog,R,D,stream);
+      // attention queries, out-proj and FFN run only on those R = KT+B rows (KT packed marker rows, then B CLS rows)
+      P("head", launch_flash_wmma(qkv,aog,NTg,H,HD,0,d_vlen,d_soff,d_gtseq,d_gdst,scale,stream,d_grow);
+                launch_gather(x,d_grow,xg,R,D,stream);
                 gemm_res_ln(aog,hl.outW,xg,R,D,D,hl.outB,hl.n2w,hl.n2b,xng);
                 linear(xng,hl.l1W,ffg,R,FF,D);
                 launch_bias_act(ffg,hl.l1B,R,FF,1,stream);
@@ -463,18 +465,18 @@ void Engine::run(int T,int B,int KT){
   HC(hipMemcpyAsync(h_act,d_act,(size_t)B*cfg.n_act*4,hipMemcpyDeviceToHost,stream));
 }
 
-void Engine::execute(int T,int B,int KT){
-  auto key=std::make_tuple(T,B,KT);
+void Engine::execute(int T,int B,int KT,int NTg){
+  auto key=std::make_tuple(T,B,KT,NTg);
   if(use_graphs){
     auto it=graphs.find(key);
     if(it!=graphs.end()){ HC(hipGraphLaunch(it->second,stream)); HC(hipStreamSynchronize(stream)); return; }
   }
-  run(T,B,KT);                                 // eager: produces this call's result
+  run(T,B,KT,NTg);                             // eager: produces this call's result
   HC(hipStreamSynchronize(stream));
   if(!use_graphs || graphs.size()>=512) return;
   hipGraph_t g; hipGraphExec_t ex;
   if(hipStreamBeginCapture(stream,hipStreamCaptureModeThreadLocal)!=hipSuccess){ use_graphs=false; return; }
-  capturing=true; run(T,B,KT); capturing=false;
+  capturing=true; run(T,B,KT,NTg); capturing=false;
   if(hipStreamEndCapture(stream,&g)!=hipSuccess || hipGraphInstantiate(&ex,g,nullptr,nullptr,0)!=hipSuccess){
     fprintf(stderr,"[laya] graph capture failed; continuing without graphs\n");
     (void)hipGetLastError(); use_graphs=false; return;
@@ -494,34 +496,38 @@ int Engine::forward_batch(int B,const int* lens,const int* ids,const int* nmark,
   }
   int b0=0;
   while(b0<B){
-    int n=0, T=0;
+    int n=0, T=0, nk=0;
     while(b0+n<B && n<MAXB){
       int l16=(lens[b0+n]+15)/16*16;
       if(T+l16>pass_tokens) break;
-      T+=l16; n++;
+      T+=l16; nk+=nmark[b0+n]; n++;
     }
-    const int Tp=(T+63)/64*64;
-    int nk=0;                                      // packed marker rows (each is a row of the pack, so nk <= T)
-    for(int i=0;i<n;i++) nk+=nmark[b0+i];
-    const int KT=(nk+63)/64*64;
-    int r=0, mo=0;
+    const int Tp=(T+63)/64*64, KT=(nk+63)/64*64;
+    int r=0, mo=0, gt=0;
     for(int i=0;i<n;i++){
-      const int b=b0+i, len=lens[b], l16=(len+15)/16*16;
-      h_soff[i]=r; h_vlen[i]=len; h_qt[i]=qtypes[b]; h_nm[i]=nmark[b];
+      const int b=b0+i, len=lens[b], l16=(len+15)/16*16, nm=nmark[b], nq=nm+1, nt=(nq+15)/16;
+      h_soff[i]=r; h_vlen[i]=len; h_qt[i]=qtypes[b]; h_nm[i]=nm;
       memcpy(h_ids+r,ids+ioff[b],len*4);
       for(int j=len;j<l16;j++) h_ids[r+j]=cfg.pad_id;
       for(int j=0;j<l16;j++){ h_pos[r+j]=j; h_seq[r+j]=i; }
       for(int t=0;t<l16/16;t++){ h_tseq[r/16+t]=i; h_tq0[r/16+t]=t*16; }
       h_moff[i]=mo;
-      for(int k=0;k<nmark[b];k++) h_grow[mo++]=r+markers[moff[b]+k];
-      h_grow[KT+i]=r;                              // CLS row
-      r+=l16;
+      for(int k=0;k<nm;k++) h_grow[mo+k]=r+markers[moff[b]+k];
+      h_grow[KT+i]=r;                                // CLS row
+      for(int t=0;t<nt;t++){
+        h_gtseq[gt+t]=i;
+        for(int lane=0;lane<16;lane++){
+          int qidx=t*16+lane;
+          h_gdst[(gt+t)*16+lane] = qidx<nm ? (mo+qidx) : (qidx==nm ? (KT+i) : -1);
+        }
+      }
+      mo+=nm; gt+=nt; r+=l16;
     }
-    for(int k=mo;k<KT;k++) h_grow[k]=0;            // padding rows: computed, never read
+    for(int k=mo;k<KT;k++) h_grow[k]=0;              // padding rows: computed, never read
     for(int j=r;j<Tp;j++){ h_ids[j]=cfg.pad_id; h_pos[j]=0; h_seq[j]=n; }   // tail rows -> dummy seq n
     for(int t=r/16;t<Tp/16;t++){ h_tseq[t]=-1; h_tq0[t]=0; }
     h_soff[n]=r; h_vlen[n]=0; h_qt[n]=0;
-    execute(Tp,n,KT);
+    execute(Tp,n,KT,gt);
     for(int i=0;i<n;i++){
       int b=b0+i;
       memcpy(logits+moff[b],h_logits+h_moff[i],nmark[b]*4);
