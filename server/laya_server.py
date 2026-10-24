@@ -5,7 +5,8 @@ see NOTICE. Tokenization and sequence construction are a faithful port of the up
 (the BPE tokenizer is the Rust `tokenizers` lib, ~100us); every tensor op runs in the
 HIP engine on the iGPU via ctypes.
 """
-import ctypes, json, math, os, queue, threading, time
+from array import array
+import ctypes, functools, itertools, json, math, os, queue, threading, time
 from typing import Dict, List, Optional
 import numpy as np
 from tokenizers import Tokenizer
@@ -32,17 +33,17 @@ class Engine:
     def forward_batch(self, seqs: List[List[int]], markers: List[List[int]], qtypes: List[int]):
         """All questions of a request in one GPU pass. Returns per-question logits and act logits."""
         B = len(seqs)
-        arr = lambda t, xs: (t * len(xs))(*xs)
-        lens = arr(ctypes.c_int, [len(s) for s in seqs])
-        nm = arr(ctypes.c_int, [len(m) for m in markers])
-        ids = arr(ctypes.c_int, [t for s in seqs for t in s])
-        mk = arr(ctypes.c_int, [p for m in markers for p in m])
-        qt = arr(ctypes.c_int, qtypes)
-        lo = (ctypes.c_float * sum(len(m) for m in markers))()
+        lens = array("i", (len(s) for s in seqs))
+        nm = array("i", (len(m) for m in markers))
+        ids = array("i", itertools.chain.from_iterable(seqs))
+        mk = array("i", itertools.chain.from_iterable(markers))
+        qt = array("i", qtypes)
+        buf = lambda a: (ctypes.c_int * len(a)).from_buffer(a)
+        lo = (ctypes.c_float * len(mk))()
         ac = (ctypes.c_float * (B * self.n_act))()
-        if self.lib.laya_forward_batch(self.h, B, lens, ids, nm, mk, qt, lo, ac) != 0:
+        if self.lib.laya_forward_batch(self.h, B, buf(lens), buf(ids), buf(nm), buf(mk), buf(qt), lo, ac) != 0:
             raise ValueError("engine rejected batch (sequence too long or too many options)")
-        lo = np.ctypeslib.as_array(lo).copy(); ac = np.ctypeslib.as_array(ac).reshape(B, self.n_act).copy()
+        lo = np.ctypeslib.as_array(lo); ac = np.ctypeslib.as_array(ac).reshape(B, self.n_act)
         out, off = [], 0
         for m in markers:
             out.append(lo[off:off + len(m)]); off += len(m)
@@ -78,15 +79,20 @@ class Tok:
         self.cls_token_id  = self.t.token_to_id(cfg.get("cls_token", "[CLS]"))
         self.sep_token_id  = self.t.token_to_id(cfg.get("sep_token", "[SEP]"))
         self.pad_token_id  = self.t.token_to_id(cfg.get("pad_token", "[PAD]"))
+        self.opt_ids = functools.lru_cache(maxsize=512)(self._opt_ids)
     def ids(self, s: str) -> List[int]:
         return self.t.encode(s, add_special_tokens=False).ids
+    def _opt_ids(self, o: str) -> tuple:
+        return tuple([self.mask_token_id] + self.ids(" " + o.replace(self.mask_token, " "))[:48])
 
-def build_sequence(tok: Tok, state, q: Dict, max_len: int, head_max_len: int):
+def build_sequence(tok: Tok, state, q: Dict, max_len: int, head_max_len: int,
+                   state_ids: Optional[List[int]] = None, opts: Optional[List[str]] = None):
     """[CLS] <type> question: <ins> [SEP] [MASK] opt0 [MASK] opt1 ... [SEP] state [SEP]"""
-    opts = render_options(q)
+    if opts is None:
+        opts = render_options(q)
     ins = str(q["ins"]).replace(tok.mask_token, " ")
     head_ids = tok.ids("%s question: %s" % (q["t"], ins))
-    opt_ids = [[tok.mask_token_id] + tok.ids(" " + o.replace(tok.mask_token, " "))[:48] for o in opts]
+    opt_ids = [tok.opt_ids(o) for o in opts]
     opt_budget = head_max_len - sum(len(o) for o in opt_ids)
     if opt_budget < 16:
         per = max(4, (head_max_len - 16) // max(1, len(opt_ids)))
@@ -99,8 +105,9 @@ def build_sequence(tok: Tok, state, q: Dict, max_len: int, head_max_len: int):
         markers.append(len(ids)); ids.extend(o)
     ids.append(tok.sep_token_id)
     room = max(0, max_len - len(ids) - 1)
-    st = tok.ids(serialize_state(state))[:room]
-    ids = ids + st + [tok.sep_token_id]
+    if state_ids is None:
+        state_ids = tok.ids(serialize_state(state).replace(tok.mask_token, " "))
+    ids = ids + state_ids[:room] + [tok.sep_token_id]
     return ids[:max_len], [m for m in markers if m < max_len]
 
 def temp_bucket(qtype: int, k: int) -> str:
@@ -138,12 +145,16 @@ class Laya:
     def prepare(self, state, questions: Dict):
         """Tokenize and build every question's sequence (CPU; runs in the request thread)."""
         qids, qs, items = [], [], []
+        state_ids = self.tok.ids(serialize_state(state).replace(self.tok.mask_token, " ")) if questions else []
+        max_len, head_max_len = self.cfg["max_len"], self.cfg["head_max_len"]
         for qid, qdef in questions.items():
             q = self._to_internal(qdef)
-            seq, markers = build_sequence(self.tok, state, q, self.cfg["max_len"], self.cfg["head_max_len"])
-            if len(markers) != len(render_options(q)):
+            opts = render_options(q)
+            seq, markers = build_sequence(self.tok, state, q, max_len, head_max_len,
+                                          state_ids=state_ids, opts=opts)
+            if len(markers) != len(opts):
                 raise ValueError("question %r: options do not fit in head_max_len=%d tokens"
-                                 % (qid, self.cfg["head_max_len"]))
+                                 % (qid, head_max_len))
             if len(markers) > self.engine.max_markers:
                 raise ValueError("question %r: more than %d options" % (qid, self.engine.max_markers))
             qids.append(qid); qs.append(q); items.append((seq, markers, QTYPES[q["t"]]))
